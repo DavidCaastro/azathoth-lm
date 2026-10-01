@@ -11,6 +11,41 @@
 
 Ciclo: investigar → evaluar → implementar → medir → documentar → commit
 
+## Lifecycle de experimentos
+
+Cada experimento sigue este flujo antes de consumir compute:
+
+1. **Hipotesis**: que mecanismo o cambio se prueba
+2. **Prediccion cuantitativa**: BPB esperado o delta estimado (ej: -0.03)
+3. **Kill criteria**: condicion para abandonar. Definir ANTES de ejecutar:
+   - Tiempo maximo (ej: si no compila en 2h, replantear)
+   - BPB minimo (ej: si eval subset >1.60, abortar)
+   - Tendencia (ej: si a 20% del corpus la curva diverge, cortar)
+4. **Ejecucion**: correr con evaluacion progresiva (ver abajo)
+5. **Veredicto**: CONFIRMA / REFUTA / INCONCLUSO + por que
+6. **Registro**: actualizar INDEX.md, MEMORY.md, heritage.md si aplica
+
+Sin prediccion previa no hay forma de distinguir un resultado bueno
+de uno mediocre. Sin kill criteria el riesgo es sunk cost fallacy.
+
+## Evaluacion progresiva
+
+El benchmark completo (enwik8, 100MB) cuesta horas. No ejecutar
+a ciegas. Escalar progresivamente:
+
+| Fase | Datos | Tiempo est. | Proposito |
+|---|---|---|---|
+| Smoke | 1 MB | ~2 min | Compila, no crashea, BPB razonable |
+| Quick | 10 MB | ~30 min | Tendencia visible, comparar con baseline |
+| Full | 100 MB | ~4-28h | Resultado oficial, registrar en INDEX.md |
+
+Criterios de escalado:
+- Smoke → Quick: si BPB < baseline + 0.15 y sin errores
+- Quick → Full: si BPB < baseline + 0.03 o tendencia descendente clara
+- Abortar en cualquier fase si kill criteria se cumple
+
+Esto permite ~10 hipotesis/dia en fase Smoke vs ~1/dia en Full.
+
 ## Benchmarks obligatorios
 
 Compresion (dominio actual, obligatorio en cada milestone):
