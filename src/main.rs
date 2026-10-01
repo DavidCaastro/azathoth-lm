@@ -19,3 +19,11 @@ fn print_usage() {
     eprintln!("  compress  --input PATH [--ckpt PATH]");
     eprintln!("  info      --ckpt PATH");
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn skeleton_compiles() {
+        assert!(true);
+    }
+}

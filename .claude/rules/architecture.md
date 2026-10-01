@@ -48,6 +48,15 @@ Principios:
 - CM para patrones exactos + neural para generalizacion
 - Single-pass streaming (O(1) por paso, excepto hash tables)
 
+## Hardware constraints
+
+- CPU-only: Intel i5 12-core, 32 GB RAM, sin GPU
+- RAM pico en inferencia: < 16 GB (dejar margen para OS + hash tables)
+- RWKV maximo sin cuantizacion: ~60M params (F32 = ~240 MB weights)
+- RWKV maximo con Q4/Q8: ~135M params (Q4 ≈ ~70 MB, Q8 ≈ ~135 MB)
+- Benchmark completo (enwik8 100MB): presupuestar 4-28h segun modelo
+- Toda decision de tamanno de modelo debe validarse contra estos limites
+
 ## Checkpoint: dos capas
 
 ```

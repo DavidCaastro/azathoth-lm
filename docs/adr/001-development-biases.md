@@ -69,6 +69,8 @@ con batch inference) sin detectar la incompatibilidad hasta la ejecucion.
 debe correr en CPU con <16GB RAM de pico. RWKV tamanno maximo ~60M params
 sin cuantizacion, ~135M con Q4/Q8.
 
+**Estado**: CERRADO (2026-10-01). Constraints documentados en architecture.md.
+
 ### B6 — Anti-patterns sin contexto
 
 **Sesgo**: Heritage tiene 20+ items en "NO REPETIR" sin distinguir el
@@ -105,6 +107,26 @@ Antes de cada decision arquitectonica significativa, revisar este ADR:
 - Cual de estos sesgos podria estar influyendo la decision?
 - La decision mitiga o refuerza el sesgo?
 - Si refuerza, hay justificacion explicita?
+
+## Gaps de diseño diferidos (requieren datos antes de decidir)
+
+Los siguientes gaps se identificaron en la config pre-dev pero cerrarlos
+ahora introduciria sesgo. Se resuelven cuando haya datos reales:
+
+### G1 — Interfaz CM↔RWKV (depende de: RWKV funcional en Rust)
+CM produce 8 predicciones bit-level, RWKV produce 256 probabilidades byte-level.
+Como se alinean y mezclan es la innovacion central del proyecto.
+**Resolver cuando**: primer forward pass de RWKV funcione en Rust.
+
+### G2 — Roadmap de fases (depende de: eval RWKV + CM baseline)
+El orden CM-first vs RWKV-first (sesgo B1) no puede decidirse sin saber
+cuanto cuesta cada path. Necesitamos al menos un smoke test de cada uno.
+**Resolver cuando**: ambos paths tengan BPB en fase Smoke (1 MB).
+
+### G3 — Compressor vs LM generativo (depende de: predictor funcional)
+Decidir ahora si el producto es compresor, LM, o ambos es prematuro.
+La arquitectura permite ambos — dejar abierto hasta tener resultados.
+**Resolver cuando**: primer benchmark oficial en INDEX.md.
 
 ## Revision
 
