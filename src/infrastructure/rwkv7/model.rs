@@ -37,9 +37,21 @@ impl Rwkv7Config {
         }
     }
 
+    pub fn default_1_5b() -> Self {
+        Self {
+            n_layer: 24,
+            n_embd: 2048,
+            n_head: 32,
+            head_size: 64,
+            vocab_size: 65536,
+        }
+    }
+
     /// Auto-detect config from weights directory name.
     pub fn from_weights_dir(dir: &str) -> Self {
-        if dir.contains("0.4b") || dir.contains("0.4B") {
+        if dir.contains("1.5b") || dir.contains("1.5B") {
+            Self::default_1_5b()
+        } else if dir.contains("0.4b") || dir.contains("0.4B") {
             Self::default_0_4b()
         } else {
             Self::default_0_1b()

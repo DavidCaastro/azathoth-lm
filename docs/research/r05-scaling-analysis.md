@@ -208,19 +208,47 @@ The 0.4B path is blocked by checkpoint availability. Options:
 | C: Fine-tune 0.4B on English/Wikipedia | 1.00-1.15 | Low | Need training infra |
 | D: Pile-trained RWKV-7 168M | 1.10-1.25 | Medium | Different tokenizer |
 
-**Recommended: Option A (short-term) + Option B (medium-term)**
+**Decision: Go directly to G1k 1.5B.**
 
-Option A: Maximize 0.1B ensemble performance now:
-1. Implement confidence skip (-0.05 to -0.10 est.)
-2. Tune ensemble hyperparameters
-3. Expand N-gram order range
-4. Target: 1.25-1.35 BPB (realistic ceiling with 0.1B)
+The 0.1B cannot reach sub-1.0 even with a perfect ensemble (~1.10 BPB
+ceiling). The G1k 1.5B is the only available checkpoint that is both
+well-trained (Sep 2026, 80% English) and large enough to close the gap.
 
-Option B: Download and evaluate G1k 1.5B when ready:
-- L24-D2048, well-trained (Sep 2026), 80% English
-- F32: ~6 GB weights + ~1.5 GB state = ~7.5 GB (fits in 32 GB)
-- Throughput: ~550 ms/tok → 10KB smoke test = ~27 min
-- MUST implement confidence skip first (throughput is critical)
+### G1k 1.5B Specifications
+
+- **Checkpoint**: `rwkv7-g1k-1.5b-20260930-ctx25600.pth` (3.06 GB, BF16)
+- **Architecture**: L=24, D=2048, H=32, head_size=64, vocab=65536
+- **Training**: G1k series (latest), 80% English, Sep 2026
+- **Context**: 25,600 tokens
+
+### Hardware Budget
+
+| Component | F32 | Notes |
+|---|---|---|
+| Weights | ~6 GB | 1.5B × 4 bytes |
+| State (H×N×N per layer) | ~300 MB | 24 × 32 × 64 × 64 × 4 |
+| Embeddings (pre-normalized) | ~512 MB | 65536 × 2048 × 4 |
+| Head Q8 | ~128 MB | 65536 × 2048 bytes |
+| N-gram hash tables | ~200 MB | Grows with data |
+| **Total** | **~7.1 GB** | Fits in 32 GB |
+
+### Throughput Estimate
+
+Compute scaling from 0.1B to 1.5B:
+- Layers: 12 → 24 (2×)
+- Dimension: 768 → 2048 (7.1× in matmul cost, D² scaling)
+- Total: ~14.2× slower than 0.1B
+- Estimated: ~650 ms/tok → ~1.5 tok/s
+
+| Phase | Data | Tokens est. | Time est. |
+|---|---|---|---|
+| Smoke | 10 KB | ~3000 | ~33 min |
+| Quick | 100 KB | ~27K | ~5 hours |
+| Full | 100 MB | ~40M | ~300 days (infeasible) |
+
+**Critical**: Full enwik8 is infeasible at this throughput.
+Must implement confidence skip + VNNI Q8 for any extended eval.
+Smoke test (10KB) is our validation gate.
 
 ## 6. Novelty Assessment
 
