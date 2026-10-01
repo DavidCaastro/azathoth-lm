@@ -2,6 +2,8 @@
 /weights/*.bin
 /weights/*.gguf
 /weights/*.pth
+/weights/*.safetensors
+/weights/rwkv7-*/
 *.ckpt
 model.ckpt/
 *.jsonl
