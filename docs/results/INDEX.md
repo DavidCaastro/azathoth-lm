@@ -6,10 +6,10 @@
 |---|---|---|
 | (inherited) analytic-lm | 1.5826 | 54 CM + LSTM, enwik8 80/20 |
 | (inherited) edge-lm | ~2.16 | WHT + multi-scale, own corpus |
-| Phase 0 — RWKV-7 only | 1.4298* | 0.1B f32+Q8head, token-level, 10KB |
-| Phase 0 — ensemble | 1.3758* | RWKV + N-gram(4) + bias head, 10KB |
+| Phase 0 — RWKV-7 only | 1.4691 | 0.1B f32+Q8head, 100KB |
+| Phase 0 — ensemble | 1.4086 | RWKV + N-gram(4) + bias head, 100KB |
 
-*10KB smoke test. Full enwik8 pending throughput optimization (72 B/s → ~386h).
+100KB "quick" eval. Full enwik8 pending throughput optimization (85 B/s → ~327h).
 
 ## Target Landscape (enwik8)
 
@@ -31,12 +31,13 @@
 
 | Metric | Value | Date |
 |---|---|---|
+| BPB ensemble (enwik8 100KB) | 1.4086 | 2026-10-01 |
 | BPB ensemble (enwik8 10KB) | 1.3758 | 2026-10-01 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
-| bytes/s | 72 | 2026-10-01 |
+| bytes/s | 85 | 2026-10-01 |
 | MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
 | ms/tok | ~46 | 2026-10-01 |
-| BPB/Mparam | 0.0138 | 2026-10-01 |
+| BPB/Mparam | 0.0141 | 2026-10-01 |
 | ARC-C | — | — |
 | HellaSwag | — | — |
 | MMLU | — | — |
@@ -54,15 +55,13 @@
 
 Progressive evaluation (enwik8 first 10KB):
 
-| Progress | RWKV-only BPB | Ensemble BPB |
-|---|---|---|
-| 25% (2.5 KB) | 1.0769 | 0.9820 |
-| 50% (5.0 KB) | 1.1320 | 1.0709 |
-| 75% (7.5 KB) | 1.3020 | 1.2456 |
-| 100% (10 KB) | 1.4298 | 1.3758 |
+| Subset | RWKV-only BPB | Ensemble BPB | Delta |
+|---|---|---|---|
+| 10 KB | 1.4298 | 1.3758 | -0.054 |
+| 100 KB | 1.4691 | 1.4086 | -0.061 |
 
-Ensemble (RWKV + N-gram orders 1-4 + online bias head) improves by
-0.054 BPB over RWKV-only at 10KB, with zero throughput overhead.
+Ensemble delta **increases** with more data (0.054 → 0.061) as online
+components learn document patterns. Full enwik8 delta est. -0.07 to -0.10.
 
 ### Ensemble Components
 
