@@ -51,6 +51,7 @@ a la tarea en curso. No cargar todas — precision > volumen.
 | Añadir deps, vendorizar, pesos | `dependencies.md` |
 | Experimentar, medir, documentar | `research.md` |
 | Proponer enfoque nuevo | `heritage.md` (verificar contra fallos conocidos) |
+| Decision arquitectonica | `heritage.md` + `docs/adr/001-development-biases.md` |
 | Arquitectura + código nuevo | `architecture.md` + `code.md` |
 | Evaluar libreria externa | `dependencies.md` + `heritage.md` |
 
