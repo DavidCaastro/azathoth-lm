@@ -6,9 +6,10 @@
 |---|---|---|
 | (inherited) analytic-lm | 1.5826 | 54 CM + LSTM, enwik8 80/20 |
 | (inherited) edge-lm | ~2.16 | WHT + multi-scale, own corpus |
-| Phase 0 — RWKV-7 baseline | 1.4227* | 0.1B Q8, token-level, 10KB smoke only |
+| Phase 0 — RWKV-7 only | 1.4298* | 0.1B f32+Q8head, token-level, 10KB |
+| Phase 0 — ensemble | 1.3758* | RWKV + N-gram(4) + bias head, 10KB |
 
-*Smoke test (10KB). Full enwik8 pending throughput optimization (64 B/s → ~434h at current speed).
+*10KB smoke test. Full enwik8 pending throughput optimization (72 B/s → ~386h).
 
 ## Target Landscape (enwik8)
 
@@ -17,7 +18,7 @@
 2.13  StateSMix   (~120K params, Mamba+n-gram)
 1.58  analytic-lm (54 CM + LSTM, our predecessor)
 1.50  PPM
-1.42  RWKV-7 0.1B (our baseline, 10KB smoke)
+1.38  azathoth-lm ensemble (RWKV+N-gram+bias, 10KB smoke)
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
 1.17  cmix        (2077 models + LSTM)
@@ -30,11 +31,12 @@
 
 | Metric | Value | Date |
 |---|---|---|
-| BPB (enwik8 10KB smoke) | 1.4227 | 2026-10-01 |
-| bytes/s | 64 | 2026-10-01 |
-| MB RAM (Q8 weights) | 130 | 2026-10-01 |
-| ms/tok | 51 | 2026-10-01 |
-| BPB/Mparam | 0.0142 | 2026-10-01 |
+| BPB ensemble (enwik8 10KB) | 1.3758 | 2026-10-01 |
+| BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
+| bytes/s | 72 | 2026-10-01 |
+| MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
+| ms/tok | ~46 | 2026-10-01 |
+| BPB/Mparam | 0.0138 | 2026-10-01 |
 | ARC-C | — | — |
 | HellaSwag | — | — |
 | MMLU | — | — |
@@ -45,30 +47,32 @@
 ### RWKV-7 0.1B Baseline (2026-10-01)
 
 - **Model**: RWKV-7 "Goose" 0.1B World (100M params, D=768, H=12, L=12)
-- **Weights**: HuggingFace `BlinkDL/rwkv-7-world` SafeTensors, Q8 per-row
-- **Quantization**: int8 + per-row f32 scale (130 MB vs 300 MB f32)
+- **Weights**: HuggingFace `BlinkDL/rwkv-7-world` SafeTensors
+- **Quantization**: f32 layers + Q8 head (48 MB head, ~350 MB total)
 - **Tokenizer**: World (65,536 tokens), greedy encoding
 - **Evaluation**: token-level cross-entropy → BPB over raw bytes
 
 Progressive evaluation (enwik8 first 10KB):
 
-| Progress | BPB | Notes |
+| Progress | RWKV-only BPB | Ensemble BPB |
 |---|---|---|
-| 25% (2.5 KB) | 1.0727 | XML headers, highly predictable |
-| 50% (5.0 KB) | 1.1272 | Still structured markup |
-| 75% (7.5 KB) | 1.2950 | Content diversifying |
-| 100% (10 KB) | 1.4227 | Smoke test final |
+| 25% (2.5 KB) | 1.0769 | 0.9820 |
+| 50% (5.0 KB) | 1.1320 | 1.0709 |
+| 75% (7.5 KB) | 1.3020 | 1.2456 |
+| 100% (10 KB) | 1.4298 | 1.3758 |
 
-BPB trend is rising as content moves from structured XML to natural text.
-Full enwik8 expected to stabilize around 1.3-1.5 BPB (model-only, no CM).
+Ensemble (RWKV + N-gram orders 1-4 + online bias head) improves by
+0.054 BPB over RWKV-only at 10KB, with zero throughput overhead.
 
-### Throughput Bottleneck
+### Ensemble Components
 
-At 51 ms/tok (64 B/s), full enwik8 (100MB) would take ~434 hours.
-This makes full evaluation impractical without optimization.
+| Component | Contribution | Overhead |
+|---|---|---|
+| RWKV-7 0.1B | Baseline predictor (~1.43 BPB) | 46 ms/tok |
+| Token N-gram (orders 1-4) | Logit bias for local patterns | ~0 ms |
+| Online bias head (lr=0.001) | Per-document SGD correction | ~0 ms |
 
-Optimization path (see R03):
-1. Revert large matrices to f32 (44 ms/tok, +37% throughput)
-2. Buffer reuse (est. 35-40 ms/tok)
-3. VNNI int8 kernel (est. 15-22 ms/tok)
-4. Head skip in hybrid mode (est. 5-10 ms/tok)
+### Throughput Status
+
+At 72 B/s (f32 layers + Q8 head), full enwik8 = ~386h.
+See R03/R04 for optimization path (VNNI kernel, confidence skip).

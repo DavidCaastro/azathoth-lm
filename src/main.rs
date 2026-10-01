@@ -5,6 +5,8 @@ mod infrastructure;
 use std::path::Path;
 
 use crate::domain::tensor::softmax;
+use crate::domain::ngram::TokenNgram;
+use crate::domain::bias_head::BiasHead;
 use crate::application::telemetry::ProgressTracker;
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
@@ -39,6 +41,7 @@ fn cmd_baseline(args: &[String]) {
     let mut input_path = "data/enwik8".to_string();
     let mut weights_dir = "weights/rwkv7-0.1b".to_string();
     let mut max_bytes: usize = 0; // 0 = entire file
+    let mut use_ensemble = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -46,6 +49,7 @@ fn cmd_baseline(args: &[String]) {
             "--input" => { i += 1; input_path = args[i].clone(); }
             "--weights" => { i += 1; weights_dir = args[i].clone(); }
             "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
+            "--ensemble" => { use_ensemble = true; }
             _ => {}
         }
         i += 1;
@@ -57,6 +61,7 @@ fn cmd_baseline(args: &[String]) {
     let total_bytes = if max_bytes > 0 { max_bytes.min(raw_bytes.len()) } else { raw_bytes.len() };
     let input_slice = &raw_bytes[..total_bytes];
     eprintln!("[baseline] input: {} ({} bytes)", input_path, total_bytes);
+    eprintln!("[baseline] mode: {}", if use_ensemble { "ensemble (RWKV + N-gram + bias)" } else { "RWKV only" });
 
     // Load tokenizer and model
     let model_path = Path::new(&weights_dir).join("model.safetensors");
@@ -64,6 +69,8 @@ fn cmd_baseline(args: &[String]) {
     let tokenizer = WorldTokenizer::load(&vocab_path);
     let config = Rwkv7Config::default_0_1b();
     let model = Rwkv7Model::load(&model_path, config);
+
+    let v = model.config.vocab_size;
 
     // Tokenize
     let tokens = tokenizer.encode(input_slice);
@@ -79,10 +86,13 @@ fn cmd_baseline(args: &[String]) {
         token_byte_lengths.push(len);
         byte_offset += len;
     }
-    // Verify tokenization roundtrip
     assert_eq!(byte_offset, total_bytes,
                "tokenizer roundtrip mismatch: {} encoded bytes vs {} input bytes",
                byte_offset, total_bytes);
+
+    // Initialize ensemble components
+    let mut ngram = TokenNgram::new(4, v);
+    let mut bias = BiasHead::new(v, 0.001);
 
     // Run forward pass and measure cross-entropy
     let mut state = Rwkv7State::new(&model.config);
@@ -91,15 +101,30 @@ fn cmd_baseline(args: &[String]) {
     eprintln!("[baseline] starting evaluation ...");
     eprintln!();
 
-    let mut logits = crate::domain::tensor::Tensor::zeros(&[model.config.vocab_size]);
+    let mut logits = crate::domain::tensor::Tensor::zeros(&[v]);
 
     for t in 0..tokens.len() {
         let tok = tokens[t] as usize;
 
         if t > 0 {
+            // Build ensemble logits
+            let mut ensemble_logits = logits.data.clone();
+            if use_ensemble {
+                ngram.predict(&mut ensemble_logits);
+                bias.apply(&mut ensemble_logits);
+            }
+
             // Compute probability of this token given context
-            let probs = softmax(&logits);
+            let ensemble_tensor = crate::domain::tensor::Tensor::from_data(
+                ensemble_logits, vec![v],
+            );
+            let probs = softmax(&ensemble_tensor);
             let prob = probs.data[tok] as f64;
+
+            // Update online components AFTER measuring (no lookahead)
+            if use_ensemble {
+                bias.update(&probs.data, tok);
+            }
 
             // Distribute this token's bits across its bytes
             let n_bytes = token_byte_lengths[t];
@@ -110,13 +135,19 @@ fn cmd_baseline(args: &[String]) {
             }
         }
 
+        // Update N-gram history (always, even at t=0)
+        if use_ensemble {
+            ngram.observe(tok as u32);
+        }
+
         logits = model.forward(tok, &mut state);
     }
 
     tracker.final_report();
 
     eprintln!();
-    eprintln!("[baseline] RWKV-7 0.1B (Q8) token-level BPB on {}: {:.4}",
+    eprintln!("[baseline] {} BPB on {}: {:.4}",
+              if use_ensemble { "ensemble" } else { "RWKV-only" },
               input_path, tracker.bpb());
     eprintln!("[baseline] done.");
 }
