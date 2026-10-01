@@ -5,6 +5,7 @@ mod infrastructure;
 use std::path::Path;
 
 use crate::domain::tensor::softmax;
+use crate::application::telemetry::ProgressTracker;
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
 
@@ -17,6 +18,7 @@ fn main() {
 
     match args[1].as_str() {
         "compress" => todo!("Phase 1: CM + RWKV hybrid predictor"),
+        "baseline" => cmd_baseline(&args[2..]),
         "rwkv-test" => cmd_rwkv_test(&args[2..]),
         "info" => todo!("Checkpoint info"),
         _ => print_usage(),
@@ -28,8 +30,95 @@ fn print_usage() {
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  compress    --input PATH [--ckpt PATH]");
+    eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
+}
+
+fn cmd_baseline(args: &[String]) {
+    let mut input_path = "data/enwik8".to_string();
+    let mut weights_dir = "weights/rwkv7-0.1b".to_string();
+    let mut max_bytes: usize = 0; // 0 = entire file
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--input" => { i += 1; input_path = args[i].clone(); }
+            "--weights" => { i += 1; weights_dir = args[i].clone(); }
+            "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    // Load input file
+    let raw_bytes = std::fs::read(&input_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {}", input_path, e));
+    let total_bytes = if max_bytes > 0 { max_bytes.min(raw_bytes.len()) } else { raw_bytes.len() };
+    let input_slice = &raw_bytes[..total_bytes];
+    eprintln!("[baseline] input: {} ({} bytes)", input_path, total_bytes);
+
+    // Load tokenizer and model
+    let model_path = Path::new(&weights_dir).join("model.safetensors");
+    let vocab_path = Path::new(&weights_dir).join("rwkv_vocab_v20230424.txt");
+    let tokenizer = WorldTokenizer::load(&vocab_path);
+    let config = Rwkv7Config::default_0_1b();
+    let model = Rwkv7Model::load(&model_path, config);
+
+    // Tokenize
+    let tokens = tokenizer.encode(input_slice);
+    eprintln!("[baseline] tokenized: {} tokens ({:.2} bytes/token)",
+              tokens.len(), total_bytes as f64 / tokens.len() as f64);
+
+    // Map each token to its byte length for BPB tracking
+    let mut token_byte_lengths = Vec::with_capacity(tokens.len());
+    let mut byte_offset = 0;
+    for &tok in &tokens {
+        let tok_bytes = tokenizer.decode_token(tok);
+        let len = tok_bytes.len();
+        token_byte_lengths.push(len);
+        byte_offset += len;
+    }
+    // Verify tokenization roundtrip
+    assert_eq!(byte_offset, total_bytes,
+               "tokenizer roundtrip mismatch: {} encoded bytes vs {} input bytes",
+               byte_offset, total_bytes);
+
+    // Run forward pass and measure cross-entropy
+    let mut state = Rwkv7State::new(&model.config);
+    let mut tracker = ProgressTracker::new(total_bytes);
+
+    eprintln!("[baseline] starting evaluation ...");
+    eprintln!();
+
+    let mut logits = crate::domain::tensor::Tensor::zeros(&[model.config.vocab_size]);
+
+    for t in 0..tokens.len() {
+        let tok = tokens[t] as usize;
+
+        if t > 0 {
+            // Compute probability of this token given context
+            let probs = softmax(&logits);
+            let prob = probs.data[tok] as f64;
+
+            // Distribute this token's bits across its bytes
+            let n_bytes = token_byte_lengths[t];
+            let bits_per_byte = -prob.max(1e-30).log2() / n_bytes as f64;
+            let byte_prob = (-(bits_per_byte * std::f64::consts::LN_2)).exp();
+            for _ in 0..n_bytes {
+                tracker.record_byte(byte_prob);
+            }
+        }
+
+        logits = model.forward(tok, &mut state);
+    }
+
+    tracker.final_report();
+
+    eprintln!();
+    eprintln!("[baseline] RWKV-7 0.1B (Q8) token-level BPB on {}: {:.4}",
+              input_path, tracker.bpb());
+    eprintln!("[baseline] done.");
 }
 
 fn cmd_rwkv_test(args: &[String]) {
