@@ -1,0 +1,8 @@
+/target
+/weights/*.bin
+/weights/*.gguf
+/weights/*.pth
+*.ckpt
+model.ckpt/
+*.jsonl
+*.log
