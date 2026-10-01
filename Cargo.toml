@@ -1,0 +1,16 @@
+[package]
+name = "azathoth-lm"
+version = "0.1.0"
+edition = "2021"
+description = "Hybrid CM + Neural byte-level predictor — sub-1.0 BPB on enwik8"
+
+[[bin]]
+name = "azathoth-lm"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
