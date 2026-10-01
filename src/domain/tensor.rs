@@ -45,15 +45,8 @@ impl Tensor {
 // ---- Core math operations ----
 
 /// y = mat @ vec, where mat is (rows, cols) and vec is (cols,)
-/// Result is (rows,)
-/// For large matrices (rows > 1024), uses multi-threaded computation.
+/// Result is (rows,). Optimized with 4-way ILP and reslicing.
 pub fn mat_vec_mul(mat: &Tensor, vec: &Tensor) -> Tensor {
-    let rows = mat.shape[0];
-    mat_vec_mul_single(mat, vec)
-}
-
-/// Single-threaded mat-vec multiply, optimized for auto-vectorization.
-fn mat_vec_mul_single(mat: &Tensor, vec: &Tensor) -> Tensor {
     assert_eq!(mat.shape.len(), 2);
     assert_eq!(vec.shape.len(), 1);
     let rows = mat.shape[0];
@@ -62,9 +55,8 @@ fn mat_vec_mul_single(mat: &Tensor, vec: &Tensor) -> Tensor {
 
     let mut out = vec![0.0f32; rows];
     let m = mat.as_slice();
-    let v = &vec.as_slice()[..cols]; // reslice for bounds elimination
+    let v = &vec.as_slice()[..cols];
 
-    // Process 4 rows at a time for instruction-level parallelism
     let rows_4 = rows / 4 * 4;
     for r in (0..rows_4).step_by(4) {
         let row0 = &m[r * cols..(r + 1) * cols];
@@ -84,7 +76,6 @@ fn mat_vec_mul_single(mat: &Tensor, vec: &Tensor) -> Tensor {
         out[r + 2] = s2;
         out[r + 3] = s3;
     }
-    // Remainder
     for r in rows_4..rows {
         let row = &m[r * cols..(r + 1) * cols];
         let mut sum = 0.0f32;
@@ -96,67 +87,91 @@ fn mat_vec_mul_single(mat: &Tensor, vec: &Tensor) -> Tensor {
     Tensor::from_data(out, vec![rows])
 }
 
-/// Multi-threaded mat-vec multiply for large matrices (e.g. head projection 65536×768).
-fn mat_vec_mul_parallel(mat: &Tensor, vec: &Tensor) -> Tensor {
-    assert_eq!(mat.shape.len(), 2);
+// ---- Q8 quantized tensor ----
+
+/// Row-quantized int8 weight matrix.
+/// Each row has one f32 scale factor: weight[r][c] ≈ q_data[r*cols+c] * scale[r]
+/// Memory: rows*cols bytes + rows*4 bytes ≈ rows*cols + 0.5% overhead
+pub struct Q8Tensor {
+    pub q_data: Vec<i8>,
+    pub scales: Vec<f32>,
+    pub rows: usize,
+    pub cols: usize,
+}
+
+impl Q8Tensor {
+    /// Quantize an f32 (rows, cols) tensor to Q8 per-row.
+    pub fn from_f32(t: &Tensor) -> Self {
+        assert_eq!(t.shape.len(), 2);
+        let rows = t.shape[0];
+        let cols = t.shape[1];
+        let mut q_data = vec![0i8; rows * cols];
+        let mut scales = vec![0.0f32; rows];
+
+        for r in 0..rows {
+            let row_start = r * cols;
+            let row = &t.data[row_start..row_start + cols];
+
+            let abs_max = row.iter().fold(0.0f32, |acc, &v| acc.max(v.abs()));
+            let scale = if abs_max > 0.0 { abs_max / 127.0 } else { 1.0 };
+            let inv_scale = 1.0 / scale;
+
+            scales[r] = scale;
+            for c in 0..cols {
+                let quantized = (row[c] * inv_scale).round();
+                q_data[row_start + c] = quantized.clamp(-127.0, 127.0) as i8;
+            }
+        }
+
+        Self { q_data, scales, rows, cols }
+    }
+
+    /// Memory usage in bytes
+    pub fn mem_bytes(&self) -> usize {
+        self.q_data.len() + self.scales.len() * 4
+    }
+}
+
+/// y = Q8_mat @ f32_vec. Dequantizes on the fly.
+/// Each row: out[r] = scale[r] * sum(q[r][c] * vec[c])
+pub fn q8_mat_vec_mul(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
     assert_eq!(vec.shape.len(), 1);
-    let rows = mat.shape[0];
-    let cols = mat.shape[1];
+    let rows = mat.rows;
+    let cols = mat.cols;
     assert_eq!(vec.shape[0], cols);
 
-    let m = mat.as_slice();
-    let v = &vec.as_slice()[..cols];
     let mut out = vec![0.0f32; rows];
+    let q = &mat.q_data;
+    let v = &vec.as_slice()[..cols];
+    let scales = &mat.scales;
 
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(12);
-    let chunk_size = (rows + num_threads - 1) / num_threads;
-
-    std::thread::scope(|s| {
-        let mut handles = Vec::new();
-        for (chunk_idx, out_chunk) in out.chunks_mut(chunk_size).enumerate() {
-            let start_row = chunk_idx * chunk_size;
-            let chunk_rows = out_chunk.len();
-            let handle = s.spawn(move || {
-                let rows_4 = chunk_rows / 4 * 4;
-                for r in (0..rows_4).step_by(4) {
-                    let gr = start_row + r;
-                    let row0 = &m[gr * cols..(gr + 1) * cols];
-                    let row1 = &m[(gr + 1) * cols..(gr + 2) * cols];
-                    let row2 = &m[(gr + 2) * cols..(gr + 3) * cols];
-                    let row3 = &m[(gr + 3) * cols..(gr + 4) * cols];
-                    let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-                    for c in 0..cols {
-                        let vc = v[c];
-                        s0 += row0[c] * vc;
-                        s1 += row1[c] * vc;
-                        s2 += row2[c] * vc;
-                        s3 += row3[c] * vc;
-                    }
-                    out_chunk[r] = s0;
-                    out_chunk[r + 1] = s1;
-                    out_chunk[r + 2] = s2;
-                    out_chunk[r + 3] = s3;
-                }
-                for r in rows_4..chunk_rows {
-                    let gr = start_row + r;
-                    let row = &m[gr * cols..(gr + 1) * cols];
-                    let mut sum = 0.0f32;
-                    for c in 0..cols {
-                        sum += row[c] * v[c];
-                    }
-                    out_chunk[r] = sum;
-                }
-            });
-            handles.push(handle);
+    let rows_4 = rows / 4 * 4;
+    for r in (0..rows_4).step_by(4) {
+        let q0 = &q[r * cols..(r + 1) * cols];
+        let q1 = &q[(r + 1) * cols..(r + 2) * cols];
+        let q2 = &q[(r + 2) * cols..(r + 3) * cols];
+        let q3 = &q[(r + 3) * cols..(r + 4) * cols];
+        let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for c in 0..cols {
+            let vc = v[c];
+            s0 += q0[c] as f32 * vc;
+            s1 += q1[c] as f32 * vc;
+            s2 += q2[c] as f32 * vc;
+            s3 += q3[c] as f32 * vc;
         }
-        for h in handles {
-            h.join().unwrap();
+        out[r] = s0 * scales[r];
+        out[r + 1] = s1 * scales[r + 1];
+        out[r + 2] = s2 * scales[r + 2];
+        out[r + 3] = s3 * scales[r + 3];
+    }
+    for r in rows_4..rows {
+        let qr = &q[r * cols..(r + 1) * cols];
+        let mut sum = 0.0f32;
+        for c in 0..cols {
+            sum += qr[c] as f32 * v[c];
         }
-    });
-
+        out[r] = sum * scales[r];
+    }
     Tensor::from_data(out, vec![rows])
 }
 

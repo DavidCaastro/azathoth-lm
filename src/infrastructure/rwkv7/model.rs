@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use crate::domain::tensor::*;
+use crate::domain::tensor::Q8Tensor;
 use crate::infrastructure::rwkv7::safetensors::SafeTensorsFile;
 
 pub struct Rwkv7Config {
@@ -29,43 +30,45 @@ impl Rwkv7Config {
 }
 
 /// Per-layer weights for time mixing (attention).
+/// Large projection matrices (D×D) stored as Q8 for bandwidth reduction.
 struct TimeMixWeights {
     // Token shift mixing vectors (D,)
     x_r: Tensor, x_w: Tensor, x_k: Tensor, x_v: Tensor, x_a: Tensor, x_g: Tensor,
     // Decay
     w0: Tensor,  // (D,) kept in f32
-    w1: Tensor,  // (D, decay_lora)
-    w2: Tensor,  // (decay_lora, D)
+    w1: Tensor,  // (D, decay_lora) — small, kept f32
+    w2: Tensor,  // (decay_lora, D) — small, kept f32
     // 'a' gate
     a0: Tensor,  // (D,)
-    a1: Tensor,  // (D, a_lora)
-    a2: Tensor,  // (a_lora, D)
+    a1: Tensor,  // (D, a_lora) — small
+    a2: Tensor,  // (a_lora, D) — small
     // v_first mixing
     v0: Tensor,  // (D,)
-    v1: Tensor,  // (D, v_lora)
-    v2: Tensor,  // (v_lora, D)
+    v1: Tensor,  // (D, v_lora) — small
+    v2: Tensor,  // (v_lora, D) — small
     // Output gate
-    g1: Tensor,  // (D, g_lora)
-    g2: Tensor,  // (g_lora, D)
+    g1: Tensor,  // (D, g_lora) — small
+    g2: Tensor,  // (g_lora, D) — small
     // Key/receptance modifiers
     k_k: Tensor, // (D,)
     k_a: Tensor, // (D,)
     r_k: Tensor, // (D,) flattened
-    // Linear projections (D, D)
-    key_w: Tensor,
-    value_w: Tensor,
-    receptance_w: Tensor,
-    output_w: Tensor,
+    // Linear projections (D, D) — Q8 quantized
+    key_w: Q8Tensor,
+    value_w: Q8Tensor,
+    receptance_w: Q8Tensor,
+    output_w: Q8Tensor,
     // GroupNorm
     ln_x_w: Tensor, // (D,)
     ln_x_b: Tensor, // (D,)
 }
 
 /// Per-layer weights for channel mixing (FFN).
+/// Large matrices stored as Q8.
 struct ChannelMixWeights {
-    x_k: Tensor,    // (D,)
-    key_w: Tensor,   // (D_FFN, D)
-    value_w: Tensor, // (D, D_FFN)
+    x_k: Tensor,       // (D,)
+    key_w: Q8Tensor,    // (D_FFN, D)
+    value_w: Q8Tensor,  // (D, D_FFN)
 }
 
 /// Per-layer weights including LayerNorm.
@@ -78,11 +81,11 @@ struct LayerWeights {
 
 pub struct Rwkv7Model {
     pub config: Rwkv7Config,
-    emb: Tensor,           // (V, D) — pre-normalized
+    emb: Tensor,           // (V, D) — pre-normalized, kept f32
     layers: Vec<LayerWeights>,
     ln_out_w: Tensor,      // (D,)
     ln_out_b: Tensor,      // (D,)
-    head_w: Tensor,        // (V, D)
+    head_w: Q8Tensor,      // (V, D) — Q8 quantized (biggest matrix)
 }
 
 /// Recurrent state for inference.
@@ -122,11 +125,9 @@ impl Rwkv7Model {
         let d = config.n_embd;
         let v = config.vocab_size;
 
-        let (emb, head_w, ln_out_w, ln_out_b);
+        let (emb, head_w_f32, ln_out_w, ln_out_b);
 
         if hf_format {
-            // HF format: model.embeddings.weight, lm_head.weight, model.norm.*
-            // pre_norm.* for embedding LayerNorm
             let emb_raw = st.load_tensor("model.embeddings.weight");
             let ln0_w = st.load_tensor("model.layers.0.pre_norm.weight");
             let ln0_b = st.load_tensor("model.layers.0.pre_norm.bias");
@@ -139,11 +140,10 @@ impl Rwkv7Model {
                 emb_data.extend_from_slice(&normed.data);
             }
             emb = Tensor::from_data(emb_data, vec![v, d]);
-            head_w = st.load_tensor("lm_head.weight");
+            head_w_f32 = st.load_tensor("lm_head.weight");
             ln_out_w = st.load_tensor("model.norm.weight");
             ln_out_b = st.load_tensor("model.norm.bias");
         } else {
-            // BlinkDL format: emb.weight, head.weight, ln_out.*, blocks.0.ln0.*
             let emb_raw = st.load_tensor("emb.weight");
             let ln0_w = st.load_tensor("blocks.0.ln0.weight");
             let ln0_b = st.load_tensor("blocks.0.ln0.bias");
@@ -156,14 +156,17 @@ impl Rwkv7Model {
                 emb_data.extend_from_slice(&normed.data);
             }
             emb = Tensor::from_data(emb_data, vec![v, d]);
-            head_w = st.load_tensor("head.weight");
+            head_w_f32 = st.load_tensor("head.weight");
             ln_out_w = st.load_tensor("ln_out.weight");
             ln_out_b = st.load_tensor("ln_out.bias");
         }
 
+        eprintln!("[rwkv7] quantizing head to Q8 ...");
+        let head_w = Q8Tensor::from_f32(&head_w_f32);
+
         let mut layers = Vec::with_capacity(config.n_layer);
         for i in 0..config.n_layer {
-            eprintln!("[rwkv7]   layer {} ...", i);
+            eprintln!("[rwkv7]   layer {} (load + Q8) ...", i);
             let layer = if hf_format {
                 load_layer_hf(&st, i)
             } else {
@@ -171,6 +174,15 @@ impl Rwkv7Model {
             };
             layers.push(layer);
         }
+
+        let f32_mb = (v * d * 4 + config.n_layer * 4 * d * d * 4) as f64 / 1_048_576.0;
+        let q8_mb = (head_w.mem_bytes() + layers.iter().map(|l| {
+            l.time_mix.key_w.mem_bytes() + l.time_mix.value_w.mem_bytes()
+            + l.time_mix.receptance_w.mem_bytes() + l.time_mix.output_w.mem_bytes()
+            + l.channel_mix.key_w.mem_bytes() + l.channel_mix.value_w.mem_bytes()
+        }).sum::<usize>()) as f64 / 1_048_576.0;
+        eprintln!("[rwkv7] Q8 weight memory: {:.1} MB (saved {:.1} MB from f32)",
+                  q8_mb, f32_mb - q8_mb);
 
         eprintln!("[rwkv7] loaded {} layers, D={}, H={}, N={}, V={}",
                   config.n_layer, d, config.n_head, config.head_size, v);
@@ -215,9 +227,9 @@ impl Rwkv7Model {
             x = add(&x, &cm_out);
         }
 
-        // Final LayerNorm + head projection
+        // Final LayerNorm + head projection (Q8)
         x = layer_norm(&x, &self.ln_out_w, &self.ln_out_b, 1e-5);
-        mat_vec_mul(&self.head_w, &x)
+        q8_mat_vec_mul(&self.head_w, &x)
     }
 }
 
@@ -240,10 +252,10 @@ fn time_mixing(
     let xa = add_scaled(x, &xx, &w.x_a);
     let xg = add_scaled(x, &xx, &w.x_g);
 
-    // Step 2: Linear projections
-    let r = mat_vec_mul(&w.receptance_w, &xr);
-    let k = mat_vec_mul(&w.key_w, &xk);
-    let v = mat_vec_mul(&w.value_w, &xv);
+    // Step 2: Linear projections (Q8)
+    let r = q8_mat_vec_mul(&w.receptance_w, &xr);
+    let k = q8_mat_vec_mul(&w.key_w, &xk);
+    let v = q8_mat_vec_mul(&w.value_w, &xv);
 
     // Step 3: Data-dependent decay
     let w_lora = mat_vec_mul(&w.w2, &tanh_t(&mat_vec_mul(&w.w1, &xw)));
@@ -349,7 +361,7 @@ fn time_mixing(
         gated[i] = out_normed.data[i] * g.data[i];
     }
     let gated_tensor = Tensor::from_data(gated, vec![d]);
-    let output = mat_vec_mul(&w.output_w, &gated_tensor);
+    let output = q8_mat_vec_mul(&w.output_w, &gated_tensor);
 
     (output, new_v_first)
 }
@@ -357,9 +369,9 @@ fn time_mixing(
 fn channel_mixing(x: &Tensor, x_prev: &Tensor, w: &ChannelMixWeights) -> Tensor {
     let xx = sub(x_prev, x);
     let k = add_scaled(x, &xx, &w.x_k);
-    let k_proj = mat_vec_mul(&w.key_w, &k);
+    let k_proj = q8_mat_vec_mul(&w.key_w, &k);
     let k_act = squared_relu(&k_proj);
-    mat_vec_mul(&w.value_w, &k_act)
+    q8_mat_vec_mul(&w.value_w, &k_act)
 }
 
 // ---- Weight loading helpers ----
@@ -416,17 +428,17 @@ fn load_layer_hf(st: &SafeTensorsFile, i: usize) -> LayerWeights {
             k_k: st.load_tensor(&format!("{}.k_k", att)),
             k_a: st.load_tensor(&format!("{}.k_a", att)),
             r_k: flatten_tensor(st.load_tensor(&format!("{}.r_k", att))),
-            key_w: st.load_tensor(&format!("{}.k_proj.weight", att)),
-            value_w: st.load_tensor(&format!("{}.v_proj.weight", att)),
-            receptance_w: st.load_tensor(&format!("{}.r_proj.weight", att)),
-            output_w: st.load_tensor(&format!("{}.o_proj.weight", att)),
+            key_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.k_proj.weight", att))),
+            value_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.v_proj.weight", att))),
+            receptance_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.r_proj.weight", att))),
+            output_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.o_proj.weight", att))),
             ln_x_w: st.load_tensor(&format!("{}.g_norm.weight", att)),
             ln_x_b: st.load_tensor(&format!("{}.g_norm.bias", att)),
         },
         channel_mix: ChannelMixWeights {
             x_k: st.load_tensor(&format!("{}.ffn.x_k", blk)),
-            key_w: st.load_tensor(&format!("{}.ffn.key.weight", blk)),
-            value_w: st.load_tensor(&format!("{}.ffn.value.weight", blk)),
+            key_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.ffn.key.weight", blk))),
+            value_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.ffn.value.weight", blk))),
         },
     }
 }
@@ -467,17 +479,17 @@ fn load_layer_blink(st: &SafeTensorsFile, i: usize) -> LayerWeights {
             k_k: st.load_tensor(&format!("{}.k_k", att)),
             k_a: st.load_tensor(&format!("{}.k_a", att)),
             r_k: flatten_tensor(st.load_tensor(&format!("{}.r_k", att))),
-            key_w: st.load_tensor(&format!("{}.key.weight", att)),
-            value_w: st.load_tensor(&format!("{}.value.weight", att)),
-            receptance_w: st.load_tensor(&format!("{}.receptance.weight", att)),
-            output_w: st.load_tensor(&format!("{}.output.weight", att)),
+            key_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.key.weight", att))),
+            value_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.value.weight", att))),
+            receptance_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.receptance.weight", att))),
+            output_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.output.weight", att))),
             ln_x_w: st.load_tensor(&format!("{}.ln_x.weight", att)),
             ln_x_b: st.load_tensor(&format!("{}.ln_x.bias", att)),
         },
         channel_mix: ChannelMixWeights {
             x_k: st.load_tensor(&format!("{}.x_k", ffn)),
-            key_w: st.load_tensor(&format!("{}.key.weight", ffn)),
-            value_w: st.load_tensor(&format!("{}.value.weight", ffn)),
+            key_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.key.weight", ffn))),
+            value_w: Q8Tensor::from_f32(&st.load_tensor(&format!("{}.value.weight", ffn))),
         },
     }
 }

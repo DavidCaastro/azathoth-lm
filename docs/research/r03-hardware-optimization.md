@@ -155,18 +155,67 @@ Dequantized mat-vec:
 | F16 compute | No native F16 compute on x86 (AVX-512 FP16 not available) |
 | Weight layout transposition | Row-major is already optimal for mat-vec |
 
-## 5. Projected Performance After Optimizations
+## 5. Q8 Implementation Results
+
+### Measured (Q8 per-row, mixed i8×f32 kernel)
+
+| State | ms/tok | tok/s | enwik8 est. | Memory |
+|---|---|---|---|---|
+| Naive (baseline) | 90 | 11.0 | 1006h | ~300 MB |
+| 4-way ILP (f32) | 44 | 22.7 | 490h | ~300 MB |
+| **Q8 per-row (actual)** | **51** | **19.6** | **568h** | **130 MB** |
+
+**Result: 16% throughput regression despite 57% memory reduction.**
+
+### Root Cause Analysis
+
+The Q8 kernel performs mixed-type arithmetic: `q[c] as f32 * v[c]`
+
+Each element requires:
+1. Load `i8` from quantized weight row
+2. Sign-extend to `i32` (`movsx` / `vpmovsxbd`)
+3. Convert to `f32` (`cvtsi2ss` / `vcvtdq2ps`)
+4. Multiply by f32 activation (`vmulps`)
+5. Accumulate (`vaddps`)
+
+vs the f32 kernel which uses fused multiply-add (`vfmadd231ps`) —
+a single instruction for steps 4-5 with no conversion overhead.
+
+The conversion chain (steps 2-3) prevents LLVM from emitting optimal
+SIMD code. The auto-vectorizer produces wider loads but the type
+conversion pipeline stalls the execution units.
+
+**Key insight**: For the 0.1B model (300 MB f32 weights), the working
+set already streams from DRAM at ~38 GB/s. Q8 reduces reads to 130 MB
+but adds ~40% more instructions per element. At 0.52 FLOPs/byte
+arithmetic intensity, the compute overhead outweighs bandwidth savings.
+
+### When Q8 WOULD help
+
+1. **Larger models (0.4B+)**: bandwidth pressure increases quadratically
+   with model dimension. At 0.4B (1.6 GB f32 → 400 MB Q8), the 4x
+   bandwidth reduction dominates the conversion overhead.
+
+2. **AVX-VNNI integer kernel** (`vpdpbusd`): native int8 dot product
+   avoids the i8→f32 conversion entirely. Requires quantizing the
+   activation vector to uint8 as well (symmetric int8×uint8 accumulation).
+   This CPU (i5-1235U) has AVX-VNNI — untapped potential.
+
+3. **Batch processing**: amortizing conversion overhead across multiple
+   tokens (irrelevant for streaming RNN inference).
+
+### Revised Projections
 
 | State | ms/tok | tok/s | enwik8 est. |
 |---|---|---|---|
-| Naive (baseline) | 90 | 11.0 | 1006h |
-| 4-way ILP (current) | 44 | 22.7 | 490h |
-| + Q8 quantization (est.) | 15-20 | 50-67 | 170-220h |
-| + Buffer reuse (est.) | 12-17 | 59-83 | 133-188h |
-| + Head skip in hybrid (est.) | 5-8 | 125-200 | 56-89h |
+| Q8 per-row (current, mixed i8×f32) | 51 | 19.6 | 568h |
+| **Revert to f32 + buffer reuse (est.)** | **35-40** | **25-29** | **380-450h** |
+| + VNNI int8 kernel (est.) | 15-22 | 45-67 | 165-245h |
+| + Head skip in hybrid (est.) | 5-10 | 100-200 | 56-111h |
 
-Target: < 200h (~8 days) for full enwik8 benchmark is achievable with
-Q8 + buffer reuse. With head skip in hybrid mode, < 100h (~4 days).
+**Decision**: Keep Q8 infrastructure in code (needed for 0.4B+ scaling)
+but the immediate throughput priority is buffer reuse with f32 weights.
+VNNI optimization is Tier 2 — requires `core::arch::x86_64` intrinsics.
 
 ## 6. Additional Files Evaluation
 
