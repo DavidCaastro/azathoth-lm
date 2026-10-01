@@ -9,16 +9,28 @@
 
 ## 1. Current enwik8 Leaderboard (as of 2026-10)
 
-| System | BPB | Architecture | Params | Key Innovation |
-|---|---|---|---|---|
-| **Nacrith** | **0.939** | SmolLM2-135M + N-gram + bias head | 135M | Token-level ensemble + CDF-24 |
-| SHA-RNN | 1.07 | 63M RNN, Boom layer | 63M | Single-head attention + layer norm |
-| cmix v21 | 1.17 | 2077 models + LSTM mixer | — | Massive model ensemble, byte-level |
-| NNCP v3 | 1.19 | 199M Transformer-XL | 199M | Large transformer, byte-level |
-| PAQ8px | 1.27 | 200+ models, SSE pipeline | — | Hand-tuned context mixing, byte-level |
-| Midicoth | 1.753 | PPM + match + Tweedie denoising | 0 | Fully online, micro-diffusion correction |
-| **azathoth-lm** | **1.42*** | RWKV-7 0.1B Q8, token-level | 100M | *smoke test, 10KB only* |
-| StateSMix | 2.13 | Mamba SSM + sparse N-gram | ~120K | Fully online, no pre-trained weights |
+| System | BPB | Architecture | Params | Level | Key Innovation |
+|---|---|---|---|---|---|
+| **Nacrith** | **0.939** | SmolLM2-135M + N-gram + bias head | 135M | Token | CDF-24 + ensemble + online bias |
+| fx2-cmix-transformer | ~0.97* | 6M Transformer + cmix 2000+ CM | 6M+CM | Bit | Neural into classical CM pipeline |
+| SHA-RNN | 1.07 | 63M RNN, Boom layer | 63M | Char | Single-head attention + layer norm |
+| ts_zip (Bellard) | 1.106 | RWKV-169M v4 Q8, pure LM | 169M | Token | Frozen RWKV, no CM, no adaptation |
+| cmix v22 | 1.17 | 2077 models + LSTM mixer | ~200 | Bit | Massive ensemble, online training |
+| NNCP v3 | 1.19 | 199M Transformer-XL (online) | 199M | Byte | Online-trained transformer |
+| PAQ8px | 1.27 | 200+ models, SSE pipeline | — | Bit | Hand-tuned context mixing |
+| **azathoth-lm** | **1.42*** | RWKV-7 0.1B Q8, token-level | 100M | Token | *smoke test, 10KB only* |
+| Midicoth | 1.753 | PPM + match + Tweedie denoising | 0 | Byte | Fully online, micro-diffusion |
+| StateSMix | 2.13 | Mamba SSM + sparse N-gram | ~120K | Token | Fully online, no pre-trained weights |
+
+*fx2-cmix-transformer: 0.0969 ratio on enwik9 (Hutter Prize); enwik8 extrapolated.
+
+**Critical reference point**: ts_zip achieves 1.106 BPB with a frozen RWKV-169M
+alone — no context mixing, no adaptation, no ensemble. The gap between ts_zip
+(1.106) and Nacrith (0.939) = **0.167 BPB** comes entirely from:
+- CDF-24 precision: **-0.517 BPB** (largest single contribution)
+- N-gram ensemble: ~-0.02 to -0.05 BPB
+- Adaptive log-space bias head: ~-0.03 BPB
+- Confidence skip: ~-0.39 BPB (speed + slight BPB improvement)
 
 ## 2. Architectural Paradigm Shift: Token-Level Wins
 
@@ -257,23 +269,122 @@ Input byte stream
 | Q8 VNNI kernel complexity | Start with f32, VNNI is optimization not prerequisite |
 | Arithmetic coder precision | Implement CDF-24 from start; 16-bit is proven insufficient |
 
-## 8. Throughput Projections (Token-Level Architecture)
+## 8. Throughput Analysis — We Are 7x Slower Than rwkv.cpp
 
-With token-level compression, throughput improves fundamentally:
+### Ecosystem benchmarks (RWKV on CPU)
+
+| Implementation | Model | Quantization | Hardware | ms/tok | tok/s |
+|---|---|---|---|---|---|
+| rwkv.cpp (ggml) | 169M | Q4_0 | 4C/8T x86 AVX2 | 6.9 | 145 |
+| rwkv.cpp (ggml) | 169M | Q4_1 | Same | 6.7 | 149 |
+| RWKV-edge | 255M | — | Apple M1 NEON | 12.1 | 82.5 |
+| **azathoth-lm** | **100M** | **Q8 (i8×f32)** | **i5-1235U AVX2+VNNI** | **51** | **19.6** |
+
+Our 100M model is smaller than rwkv.cpp's 169M yet 7x slower. The gap is
+entirely in kernel quality: ggml uses integer accumulation + SIMD intrinsics,
+we use scalar i8→f32 conversion that breaks auto-vectorization.
+
+### The ggml Q8_0 kernel technique (what we should adopt)
+
+```
+For each block of 32 values:
+  1. Quantize activation vector to Q8_0: (i8[32], f32 scale)
+  2. _mm256_maddubs_epi16(weight_u8, activation_i8)
+     → 32 u8×i8 multiplies, pairwise sum → 16 i16 values
+  3. _mm256_madd_epi16(result, ones)
+     → pairwise sum i16 → 8 i32 values
+  4. Accumulate into i32 register
+  5. After ALL blocks: cvtepi32_ps → f32, multiply by w_scale × a_scale
+```
+
+Key: **NO per-element f32 conversion**. Integer accumulation processes
+32 elements per AVX2 instruction sequence vs. 8 for our f32 kernel.
+
+On AVX-VNNI (our CPU): steps 2-3 replaced by single `VPDPBUSD` instruction.
+
+### Throughput projections (revised with ecosystem data)
 
 | Config | ms/tok | Bytes/tok | B/s | enwik8 hours |
 |---|---|---|---|---|
-| Current Q8 | 51 | 3.7 | 73 | 380h |
-| F32 (revert) | 44 | 3.7 | 84 | 330h |
-| F32 + buffer reuse (est.) | 35 | 3.7 | 106 | 262h |
-| F32 + confidence skip 50% (est.) | 35 | 7.4* | 211 | 132h |
-| Q8 VNNI kernel (est.) | 18 | 3.7 | 206 | 135h |
-| VNNI + confidence skip (est.) | 18 | 7.4* | 411 | 68h |
+| Current (i8×f32 Q8) | 51 | 3.7 | 73 | 380h |
+| F32 (revert to baseline) | 44 | 3.7 | 84 | 330h |
+| Q8 both-sides + AVX2 (est.) | 15-20 | 3.7 | 185-247 | 112-150h |
+| Q8 both-sides + VNNI (est.) | 8-12 | 3.7 | 308-463 | 60-90h |
+| + Confidence skip 40% (est.) | 8-12 | 6.2* | 513-771 | 36-54h |
+| + Layer pruning 8/12 (est.) | 5-8 | 6.2* | 775-1240 | 22-36h |
 
-*Confidence skip effectively doubles bytes/tok by skipping neural calls.
+*Effective bytes/tok increases because skipped tokens cost zero RWKV time.
 
-Target: < 100h for full enwik8 is achievable with VNNI + confidence skip.
-Without VNNI, confidence skip alone brings f32 to ~132h — marginal but usable.
+rwkv.cpp achieves 6.9 ms for 169M (Q4). Our 100M at Q8 with VNNI
+should reach 8-12 ms — consistent with ecosystem data.
+
+**Target: < 50h for full enwik8** is achievable with VNNI + confidence skip.
+Layer pruning would bring it to ~30h — comparable to analytic-lm's 28h benchmark.
+
+## 9. Token-to-Byte Bridge: Three Approaches
+
+The fundamental question: how to combine token-level RWKV with byte-level CM.
+
+### Approach A: Pure token-level (Nacrith)
+
+Operate entirely at token level. CM becomes token-level N-gram.
+Arithmetic coding encodes tokens directly.
+
+- **Pro**: Simplest, proven (0.939 BPB), fastest
+- **Con**: Abandons byte-level CM expertise, 65K-vocab CDF overhead
+
+### Approach B: Exact byte marginalization (BTR Lemma, ICLR 2025)
+
+Convert token probabilities to exact byte probabilities:
+P(byte | ctx) = Σ over all token sequences covering that byte.
+
+- **Pro**: Mathematically exact, enables byte-level CM mixing
+- **Con**: O(n × max_token_length) model calls per byte, computationally expensive
+- **Ref**: [Exact Byte-Level Probabilities from Tokenized LMs](https://arxiv.org/abs/2410.09303)
+
+### Approach C: Bit-level hybrid (fx2-cmix-transformer)
+
+Neural model feeds token-level logits into cmix's bit-level pipeline.
+Byte distribution decomposed into 8 bit predictions.
+
+- **Pro**: Preserves CM infrastructure, additive composition, proven ~0.97 BPB
+- **Con**: Token-byte alignment complex, Transformer was task-specific trained
+
+### Approach D: Token-level primary + byte-level fallback
+
+RWKV at token level for most of stream. Fall back to byte-level CM
+for regions where tokenization is uncertain or confidence is low.
+
+- **Pro**: Best of both worlds, adaptive compute allocation
+- **Con**: Complex switching logic, state synchronization challenges
+
+### Recommendation
+
+**Start with Approach A** (pure token-level) — minimum complexity, proven
+sub-1.0 BPB. Measure RWKV-alone BPB first. If <1.1 BPB, add N-gram +
+bias head. If >1.1, evaluate Approach C or model scaling (0.4B).
+
+## 10. Layer Pruning: Free Speed
+
+Research shows removing 75% of layers from an LM retains 98.6% of quality
+([LayerRoute, 2026](https://arxiv.org/abs/2609.13682)).
+
+For our 12-layer RWKV-7 0.1B:
+- Keep 4 layers (bottom 2 + top 2): est. ~98% quality, 3x speedup
+- Keep 8 layers: est. ~99.5% quality, 1.5x speedup
+- Empirically test: measure per-layer BPB contribution, prune least impactful
+
+This is orthogonal to kernel optimization — speedups multiply.
+
+## 11. Kill Criteria and Decision Framework
+
+| Question | Threshold | Action |
+|---|---|---|
+| RWKV-7 0.1B token-level BPB on full enwik8? | If >1.3 | Scale to 0.4B |
+| N-gram + bias head improvement? | If <0.01 BPB | Drop CM, pure RWKV + arithmetic coding |
+| CDF-24 vs CDF-16 difference? | If <0.1 BPB | Keep CDF-16 (simpler) |
+| Confidence skip rate on enwik8? | If <20% | Skip optimization not worth complexity |
+| VNNI kernel speedup vs f32? | If <1.5x | Stay with f32 auto-vectorization |
 
 ## References
 
@@ -287,3 +398,12 @@ Without VNNI, confidence skip alone brings f32 to ~132h — marginal but usable.
 - [Auto-Vectorization for Newer Instruction Sets in Rust](https://www.nickwilcox.com/blog/autovec2/) — Wilcox
 - [RWKV-7 "Goose" with Expressive Dynamic State Evolution](https://arxiv.org/abs/2503.14456) — Peng et al., 2025
 - [Vals RSI Index Leaderboard](https://www.vals.ai/benchmarks/rsi_index) — 2026
+- [rwkv.cpp with ggml benchmarks](https://github.com/RWKV/rwkv.cpp) — RWKV Foundation
+- [ts_zip: Text Compression using LLMs](https://bellard.org/ts_zip/) — Bellard
+- [fx2-cmix-transformer (Hutter Prize)](https://github.com/astOwOlfo/fx2-cmix-transformer-v1) — 2026
+- [Exact Byte-Level Probabilities from Tokenized LMs (ICLR 2025)](https://arxiv.org/abs/2410.09303) — Meta
+- [L3TC: Leveraging RWKV for Learned Lossless Compression (AAAI 2025)](https://ojs.aaai.org/index.php/AAAI/article/view/33446)
+- [LayerRoute: Adaptive Layer-Skipping](https://arxiv.org/abs/2609.13682) — 2026
+- [RWKV-edge: Compressed RWKV for Edge Devices](https://arxiv.org/abs/2412.10856) — 2024
+- [Chained Lightweight Neural Predictors with Information Inheritance](https://arxiv.org/abs/2604.15472) — 2026
+- [NNCP: Lossless Data Compression with Neural Networks](https://bellard.org/nncp/) — Bellard
