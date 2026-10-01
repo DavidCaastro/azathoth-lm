@@ -1,0 +1,6 @@
+# Corpus files (too large for git)
+*.txt
+*.bin
+*.zip
+*.gz
+!.gitignore
