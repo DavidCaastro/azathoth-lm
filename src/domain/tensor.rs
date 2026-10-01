@@ -46,7 +46,14 @@ impl Tensor {
 
 /// y = mat @ vec, where mat is (rows, cols) and vec is (cols,)
 /// Result is (rows,)
+/// For large matrices (rows > 1024), uses multi-threaded computation.
 pub fn mat_vec_mul(mat: &Tensor, vec: &Tensor) -> Tensor {
+    let rows = mat.shape[0];
+    mat_vec_mul_single(mat, vec)
+}
+
+/// Single-threaded mat-vec multiply, optimized for auto-vectorization.
+fn mat_vec_mul_single(mat: &Tensor, vec: &Tensor) -> Tensor {
     assert_eq!(mat.shape.len(), 2);
     assert_eq!(vec.shape.len(), 1);
     let rows = mat.shape[0];
@@ -55,15 +62,101 @@ pub fn mat_vec_mul(mat: &Tensor, vec: &Tensor) -> Tensor {
 
     let mut out = vec![0.0f32; rows];
     let m = mat.as_slice();
-    let v = vec.as_slice();
-    for r in 0..rows {
-        let row_start = r * cols;
+    let v = &vec.as_slice()[..cols]; // reslice for bounds elimination
+
+    // Process 4 rows at a time for instruction-level parallelism
+    let rows_4 = rows / 4 * 4;
+    for r in (0..rows_4).step_by(4) {
+        let row0 = &m[r * cols..(r + 1) * cols];
+        let row1 = &m[(r + 1) * cols..(r + 2) * cols];
+        let row2 = &m[(r + 2) * cols..(r + 3) * cols];
+        let row3 = &m[(r + 3) * cols..(r + 4) * cols];
+        let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for c in 0..cols {
+            let vc = v[c];
+            s0 += row0[c] * vc;
+            s1 += row1[c] * vc;
+            s2 += row2[c] * vc;
+            s3 += row3[c] * vc;
+        }
+        out[r] = s0;
+        out[r + 1] = s1;
+        out[r + 2] = s2;
+        out[r + 3] = s3;
+    }
+    // Remainder
+    for r in rows_4..rows {
+        let row = &m[r * cols..(r + 1) * cols];
         let mut sum = 0.0f32;
         for c in 0..cols {
-            sum += m[row_start + c] * v[c];
+            sum += row[c] * v[c];
         }
         out[r] = sum;
     }
+    Tensor::from_data(out, vec![rows])
+}
+
+/// Multi-threaded mat-vec multiply for large matrices (e.g. head projection 65536×768).
+fn mat_vec_mul_parallel(mat: &Tensor, vec: &Tensor) -> Tensor {
+    assert_eq!(mat.shape.len(), 2);
+    assert_eq!(vec.shape.len(), 1);
+    let rows = mat.shape[0];
+    let cols = mat.shape[1];
+    assert_eq!(vec.shape[0], cols);
+
+    let m = mat.as_slice();
+    let v = &vec.as_slice()[..cols];
+    let mut out = vec![0.0f32; rows];
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(12);
+    let chunk_size = (rows + num_threads - 1) / num_threads;
+
+    std::thread::scope(|s| {
+        let mut handles = Vec::new();
+        for (chunk_idx, out_chunk) in out.chunks_mut(chunk_size).enumerate() {
+            let start_row = chunk_idx * chunk_size;
+            let chunk_rows = out_chunk.len();
+            let handle = s.spawn(move || {
+                let rows_4 = chunk_rows / 4 * 4;
+                for r in (0..rows_4).step_by(4) {
+                    let gr = start_row + r;
+                    let row0 = &m[gr * cols..(gr + 1) * cols];
+                    let row1 = &m[(gr + 1) * cols..(gr + 2) * cols];
+                    let row2 = &m[(gr + 2) * cols..(gr + 3) * cols];
+                    let row3 = &m[(gr + 3) * cols..(gr + 4) * cols];
+                    let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+                    for c in 0..cols {
+                        let vc = v[c];
+                        s0 += row0[c] * vc;
+                        s1 += row1[c] * vc;
+                        s2 += row2[c] * vc;
+                        s3 += row3[c] * vc;
+                    }
+                    out_chunk[r] = s0;
+                    out_chunk[r + 1] = s1;
+                    out_chunk[r + 2] = s2;
+                    out_chunk[r + 3] = s3;
+                }
+                for r in rows_4..chunk_rows {
+                    let gr = start_row + r;
+                    let row = &m[gr * cols..(gr + 1) * cols];
+                    let mut sum = 0.0f32;
+                    for c in 0..cols {
+                        sum += row[c] * v[c];
+                    }
+                    out_chunk[r] = sum;
+                }
+            });
+            handles.push(handle);
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+    });
+
     Tensor::from_data(out, vec![rows])
 }
 
