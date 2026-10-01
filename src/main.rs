@@ -67,7 +67,7 @@ fn cmd_baseline(args: &[String]) {
     let model_path = Path::new(&weights_dir).join("model.safetensors");
     let vocab_path = Path::new(&weights_dir).join("rwkv_vocab_v20230424.txt");
     let tokenizer = WorldTokenizer::load(&vocab_path);
-    let config = Rwkv7Config::default_0_1b();
+    let config = Rwkv7Config::from_weights_dir(&weights_dir);
     let model = Rwkv7Model::load(&model_path, config);
 
     let v = model.config.vocab_size;
@@ -173,7 +173,7 @@ fn cmd_rwkv_test(args: &[String]) {
     let tokenizer = WorldTokenizer::load(&vocab_path);
     eprintln!("[rwkv-test] tokenizer loaded: {} entries", tokenizer.vocab_size());
 
-    let config = Rwkv7Config::default_0_1b();
+    let config = Rwkv7Config::from_weights_dir(&weights_dir);
     let model = Rwkv7Model::load(&model_path, config);
 
     let tokens = tokenizer.encode(prompt.as_bytes());

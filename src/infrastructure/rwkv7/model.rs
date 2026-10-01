@@ -26,6 +26,25 @@ impl Rwkv7Config {
             vocab_size: 65536,
         }
     }
+
+    pub fn default_0_4b() -> Self {
+        Self {
+            n_layer: 24,
+            n_embd: 1024,
+            n_head: 16,
+            head_size: 64,
+            vocab_size: 65536,
+        }
+    }
+
+    /// Auto-detect config from weights directory name.
+    pub fn from_weights_dir(dir: &str) -> Self {
+        if dir.contains("0.4b") || dir.contains("0.4B") {
+            Self::default_0_4b()
+        } else {
+            Self::default_0_1b()
+        }
+    }
 }
 
 /// Per-layer weights for time mixing (attention).
@@ -443,34 +462,46 @@ fn load_layer_blink(st: &SafeTensorsFile, i: usize) -> LayerWeights {
 
     let has_v0 = st.has_tensor(&format!("{}.v0", att));
 
+    // BlinkDL LoRA convention: code uses `vec @ matrix` (vector on left)
+    // Our mat_vec_mul uses `matrix @ vec` (matrix on left)
+    // Must transpose all LoRA weights: [D, lora] → [lora, D]
+    let w1 = transpose_2d(&st.load_tensor(&format!("{}.w1", att)));
+    let w2 = transpose_2d(&st.load_tensor(&format!("{}.w2", att)));
+    let a1 = transpose_2d(&st.load_tensor(&format!("{}.a1", att)));
+    let a2 = transpose_2d(&st.load_tensor(&format!("{}.a2", att)));
+    let g1 = transpose_2d(&st.load_tensor(&format!("{}.g1", att)));
+    let g2 = transpose_2d(&st.load_tensor(&format!("{}.g2", att)));
+    let (v1, v2) = if has_v0 {
+        (
+            transpose_2d(&st.load_tensor(&format!("{}.v1", att))),
+            transpose_2d(&st.load_tensor(&format!("{}.v2", att))),
+        )
+    } else {
+        (a1.clone(), a2.clone())
+    };
+
     LayerWeights {
         ln1_w: st.load_tensor(&format!("{}.ln1.weight", blk)),
         ln1_b: st.load_tensor(&format!("{}.ln1.bias", blk)),
         ln2_w: st.load_tensor(&format!("{}.ln2.weight", blk)),
         ln2_b: st.load_tensor(&format!("{}.ln2.bias", blk)),
         time_mix: TimeMixWeights {
-            x_r: st.load_tensor(&format!("{}.x_r", att)),
-            x_w: st.load_tensor(&format!("{}.x_w", att)),
-            x_k: st.load_tensor(&format!("{}.x_k", att)),
-            x_v: st.load_tensor(&format!("{}.x_v", att)),
-            x_a: st.load_tensor(&format!("{}.x_a", att)),
-            x_g: st.load_tensor(&format!("{}.x_g", att)),
-            w0: st.load_tensor(&format!("{}.w0", att)),
-            w1: st.load_tensor(&format!("{}.w1", att)),
-            w2: st.load_tensor(&format!("{}.w2", att)),
-            a0: st.load_tensor(&format!("{}.a0", att)),
-            a1: st.load_tensor(&format!("{}.a1", att)),
-            a2: st.load_tensor(&format!("{}.a2", att)),
-            v0: if has_v0 { st.load_tensor(&format!("{}.v0", att)) }
-                else { st.load_tensor(&format!("{}.a0", att)) },
-            v1: if has_v0 { st.load_tensor(&format!("{}.v1", att)) }
-                else { st.load_tensor(&format!("{}.a1", att)) },
-            v2: if has_v0 { st.load_tensor(&format!("{}.v2", att)) }
-                else { st.load_tensor(&format!("{}.a2", att)) },
-            g1: st.load_tensor(&format!("{}.g1", att)),
-            g2: st.load_tensor(&format!("{}.g2", att)),
-            k_k: st.load_tensor(&format!("{}.k_k", att)),
-            k_a: st.load_tensor(&format!("{}.k_a", att)),
+            x_r: squeeze(st.load_tensor(&format!("{}.x_r", att))),
+            x_w: squeeze(st.load_tensor(&format!("{}.x_w", att))),
+            x_k: squeeze(st.load_tensor(&format!("{}.x_k", att))),
+            x_v: squeeze(st.load_tensor(&format!("{}.x_v", att))),
+            x_a: squeeze(st.load_tensor(&format!("{}.x_a", att))),
+            x_g: squeeze(st.load_tensor(&format!("{}.x_g", att))),
+            w0: squeeze(st.load_tensor(&format!("{}.w0", att))),
+            w1, w2,
+            a0: squeeze(st.load_tensor(&format!("{}.a0", att))),
+            a1, a2,
+            v0: if has_v0 { squeeze(st.load_tensor(&format!("{}.v0", att))) }
+                else { squeeze(st.load_tensor(&format!("{}.a0", att))) },
+            v1, v2,
+            g1, g2,
+            k_k: squeeze(st.load_tensor(&format!("{}.k_k", att))),
+            k_a: squeeze(st.load_tensor(&format!("{}.k_a", att))),
             r_k: flatten_tensor(st.load_tensor(&format!("{}.r_k", att))),
             key_w: st.load_tensor(&format!("{}.key.weight", att)),
             value_w: st.load_tensor(&format!("{}.value.weight", att)),
@@ -480,7 +511,7 @@ fn load_layer_blink(st: &SafeTensorsFile, i: usize) -> LayerWeights {
             ln_x_b: st.load_tensor(&format!("{}.ln_x.bias", att)),
         },
         channel_mix: ChannelMixWeights {
-            x_k: st.load_tensor(&format!("{}.x_k", ffn)),
+            x_k: squeeze(st.load_tensor(&format!("{}.x_k", ffn))),
             key_w: st.load_tensor(&format!("{}.key.weight", ffn)),
             value_w: st.load_tensor(&format!("{}.value.weight", ffn)),
         },

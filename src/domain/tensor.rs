@@ -17,21 +17,9 @@ impl Tensor {
         self.data.len()
     }
 
-    /// Reshape (no copy — just changes the shape metadata).
-    /// Panics if total elements differ.
-    pub fn reshape(&self, new_shape: &[usize]) -> Self {
-        let n: usize = new_shape.iter().product();
-        assert_eq!(n, self.numel(), "reshape: element count mismatch");
-        Self { data: self.data.clone(), shape: new_shape.to_vec() }
-    }
-
     /// View as 1D
     pub fn as_slice(&self) -> &[f32] {
         &self.data
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [f32] {
-        &mut self.data
     }
 
     /// Create from raw f32 data + shape
@@ -40,6 +28,20 @@ impl Tensor {
         assert_eq!(data.len(), n, "from_data: data len {} != shape product {}", data.len(), n);
         Self { data, shape }
     }
+}
+
+/// Transpose a 2D tensor: (R, C) → (C, R).
+pub fn transpose_2d(t: &Tensor) -> Tensor {
+    assert_eq!(t.shape.len(), 2, "transpose_2d: expected 2D tensor");
+    let r = t.shape[0];
+    let c = t.shape[1];
+    let mut out = vec![0.0f32; r * c];
+    for i in 0..r {
+        for j in 0..c {
+            out[j * r + i] = t.data[i * c + j];
+        }
+    }
+    Tensor::from_data(out, vec![c, r])
 }
 
 // ---- Core math operations ----
@@ -215,16 +217,6 @@ pub fn sigmoid(x: &Tensor) -> Tensor {
 
 pub fn tanh_t(x: &Tensor) -> Tensor {
     let data: Vec<f32> = x.data.iter().map(|&v| v.tanh()).collect();
-    Tensor::from_data(data, x.shape.clone())
-}
-
-pub fn exp(x: &Tensor) -> Tensor {
-    let data: Vec<f32> = x.data.iter().map(|&v| v.exp()).collect();
-    Tensor::from_data(data, x.shape.clone())
-}
-
-pub fn relu(x: &Tensor) -> Tensor {
-    let data: Vec<f32> = x.data.iter().map(|&v| v.max(0.0)).collect();
     Tensor::from_data(data, x.shape.clone())
 }
 

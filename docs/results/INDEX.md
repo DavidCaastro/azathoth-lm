@@ -26,7 +26,8 @@
 1.07  SHA-RNN     (63M params)
 0.97  fx2-cmix    (6M Transformer + 2000+ CM)
 0.94  Nacrith     (135M SmolLM2 + CM)
-~0.95 ← PROJECTED azathoth-lm (RWKV-7 0.4B + ensemble)
+~1.25 ← PROJECTED azathoth-lm (0.1B + tuned ensemble + skip)
+~0.95 ← PROJECTED azathoth-lm (G1k 1.5B + ensemble, if viable)
 <1.0  ← OUR TARGET
 ```
 
@@ -79,13 +80,16 @@ components learn document patterns. Full enwik8 delta est. -0.07 to -0.10.
 At 72 B/s (f32 layers + Q8 head), full enwik8 = ~386h.
 See R03/R04 for optimization path (VNNI kernel, confidence skip).
 
-## Scaling Projections (R05, 2026-10-02)
+## Scaling Results (R05, 2026-10-02)
 
-| Model | Est. BPB alone | Est. BPB ensemble | Feasibility |
-|---|---|---|---|
-| RWKV-7 0.1B (current) | 1.47 | 1.41 | Running |
-| RWKV-7 0.4B (projected) | 1.00-1.10 | **0.93-1.03** | High priority |
-| RWKV-7 1.5B Q4 (fallback) | ~0.80 | ~0.75 | Fallback only |
+| Model | BPB (10KB) | Status |
+|---|---|---|
+| RWKV-7 0.1B World (current) | **1.4298** | Best available |
+| RWKV-7 0.4B World v2.9 | 1.6549 | KILLED — worse than 0.1B |
+| RWKV-7 G1d 0.4B | 1.8817 | KILLED — under-trained |
+| RWKV-7 G1k 1.5B (not tested) | ~0.85-1.00 est. | Next candidate |
 
-Decision: **Scale to 0.4B** — dominant factor for sub-1.0 BPB.
+0.4B scaling hypothesis failed: no available checkpoint beats 0.1B.
+Root cause: Pile-trained 0.4B not public; World/G1d checkpoints under-trained.
+Next: maximize 0.1B ensemble, then evaluate G1k 1.5B.
 See `docs/research/r05-scaling-analysis.md` for full analysis.

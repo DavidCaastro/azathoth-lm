@@ -1,7 +1,7 @@
 # R05: Scaling Analysis — Path to Sub-1.0 BPB
 
 - **Date**: 2026-10-02
-- **Status**: Complete
+- **Status**: Complete (updated with empirical 0.4B results)
 - **Purpose**: Determine whether scaling from RWKV-7 0.1B to 0.4B is the
   correct path to sub-1.0 BPB, with quantitative projections and risk analysis
 
@@ -159,39 +159,68 @@ Kill criteria:
 - If 100KB BPB > 1.15: insufficient scaling, evaluate 1.5B
 - If 1MB BPB > 1.05: ensemble insufficient, need confidence skip
 
-## 5. Risk Analysis
+## 5. Empirical 0.4B Results (2026-10-02)
 
-### 5.1 Risks
+### 5.1 KILL: 0.4B Scaling Hypothesis Failed
 
-| Risk | Probability | Impact | Mitigation |
+**Both available 0.4B checkpoints perform WORSE than the 0.1B on enwik8:**
+
+| Checkpoint | Format | BPB (10KB) | vs 0.1B |
 |---|---|---|---|
-| 0.4B BPB > 1.15 | Low (20%) | High | Fall back to 1.5B Q4 |
-| Q8 VNNI kernel hard to implement | Medium (40%) | Medium | Use F32, accept slower throughput |
-| Confidence skip regression | Low (15%) | Medium | Tune threshold, fallback to no-skip |
-| Full enwik8 impractical | Medium (35%) | Medium | Report 10MB results, extrapolate |
-| World tokenizer suboptimal for enwik8 | Medium (30%) | Low | English subword coverage still good |
+| RWKV-7 0.1B World (fla-hub) | HF | **1.4298** | baseline |
+| RWKV-7 0.4B World v2.9 (fla-hub) | HF | 1.6549 | **+0.225** |
+| RWKV-7 0.4B World v2.9 + ensemble | HF | 1.5787 | +0.149 |
+| RWKV-7 G1d 0.4B (BlinkDL native) | BlinkDL | 1.8817 | **+0.452** |
 
-### 5.2 Decision: Scale to 0.4B
+Kill criteria triggered: 10KB BPB > 1.30 for all 0.4B variants.
 
-**PROCEED with RWKV-7 0.4B.** Rationale:
+### 5.2 Root Cause Analysis
 
-1. **Model size is the dominant factor**: The gap from 1.41 to <1.0 is 0.41 BPB.
-   Scaling alone provides ~0.38 BPB. Ensemble provides ~0.05-0.10. Combined: ~0.43-0.48.
-2. **Proven architecture**: RWKV-7 0.4B Pile PPL 7.2 is competitive with
-   transformers at similar scale, and better than Mamba.
-3. **Memory feasible**: 950 MB (Q8) or 2.2 GB (F32), well within 32 GB.
-4. **Our advantage over Nacrith**: O(1) memory, no context sliding, pure CPU.
-5. **Fallback exists**: 1.5B Q4 (~950 MB) if 0.4B proves insufficient.
+1. **World v2.9 checkpoint**: Trained on multilingual data, likely
+   under-performs on English-only enwik8 compared to smaller, more
+   English-focused training runs.
+2. **G1d checkpoint**: Version "d" (Feb 2026) is the earliest available
+   RWKV-7 G1 version. Only g1j and g1k (Aug-Sep 2026) are well-trained,
+   but these start at 1.5B parameters.
+3. **No Pile-trained 0.4B**: The paper's PPL 7.2 (421M) result uses
+   Pile-trained checkpoints that aren't publicly available at 0.4B.
+4. **Model file integrity**: Both files verified complete (correct byte
+   counts, valid tensor dimensions, non-corrupted weights).
 
-### 5.3 Implementation Priority
+### 5.3 Bug Fix: BlinkDL LoRA Transposition
 
-1. **Download RWKV-7 0.4B weights** (SafeTensors from HuggingFace)
-2. **Generalize model loader** (parameterize D=1024, L=24)
-3. **Smoke test** (10KB enwik8, verify BPB < 1.30)
-4. **Implement confidence skip** (high impact: -0.05 to -0.10 BPB)
-5. **VNNI Q8 kernel** (throughput: 3× speedup estimated)
-6. **Tune ensemble** (lr sweep, N-gram order/weights, skip threshold)
-7. **Progressive benchmark** (100KB → 1MB → 10MB → full)
+During 0.4B testing, discovered and fixed a latent bug in the BlinkDL
+weight loader: LoRA weights need transposition because BlinkDL uses
+`vec @ matrix` while our code uses `mat_vec_mul(matrix, vec)`.
+
+Affected weights: w1/w2, a1/a2, v1/v2, g1/g2 (8 tensors per layer).
+This bug existed since the BlinkDL loader was written but was never
+triggered because only HF-format models were used.
+
+### 5.4 Revised Strategy
+
+The 0.4B path is blocked by checkpoint availability. Options:
+
+| Option | BPB est. | Feasibility | Risk |
+|---|---|---|---|
+| A: Stay with 0.1B, maximize ensemble | 1.20-1.35 | High | Can't reach sub-1.0 |
+| B: RWKV-7 G1k 1.5B (F32, ~6 GB) | 0.85-1.00 | Medium | Throughput: ~550 ms/tok |
+| C: Fine-tune 0.4B on English/Wikipedia | 1.00-1.15 | Low | Need training infra |
+| D: Pile-trained RWKV-7 168M | 1.10-1.25 | Medium | Different tokenizer |
+
+**Recommended: Option A (short-term) + Option B (medium-term)**
+
+Option A: Maximize 0.1B ensemble performance now:
+1. Implement confidence skip (-0.05 to -0.10 est.)
+2. Tune ensemble hyperparameters
+3. Expand N-gram order range
+4. Target: 1.25-1.35 BPB (realistic ceiling with 0.1B)
+
+Option B: Download and evaluate G1k 1.5B when ready:
+- L24-D2048, well-trained (Sep 2026), 80% English
+- F32: ~6 GB weights + ~1.5 GB state = ~7.5 GB (fits in 32 GB)
+- Throughput: ~550 ms/tok → 10KB smoke test = ~27 min
+- MUST implement confidence skip first (throughput is critical)
 
 ## 6. Novelty Assessment
 
