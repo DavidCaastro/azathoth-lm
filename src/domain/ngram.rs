@@ -101,6 +101,62 @@ impl TokenNgram {
         let _ = total_weight;
     }
 
+    /// Return the confidence of the best N-gram prediction.
+    /// Confidence = max(count) / total for the highest matching order.
+    /// Returns (confidence, best_token, best_order).
+    /// Confidence 0.0 means no N-gram data available.
+    pub fn confidence(&self) -> (f32, u32, usize) {
+        // Check from highest to lowest order — higher orders are more specific
+        for order in (1..=self.max_order.min(self.history_len)).rev() {
+            let ctx_hash = self.context_hash(order);
+            if let Some(entry) = self.tables[order - 1].get(&ctx_hash) {
+                if entry.total < 2 { continue; } // need at least 2 observations
+                let mut best_tok = 0u32;
+                let mut best_count = 0u32;
+                for (&tok, &count) in &entry.counts {
+                    if count > best_count {
+                        best_count = count;
+                        best_tok = tok;
+                    }
+                }
+                let confidence = best_count as f32 / entry.total as f32;
+                return (confidence, best_tok, order);
+            }
+        }
+        (0.0, 0, 0)
+    }
+
+    /// Produce a standalone probability distribution from N-gram only.
+    /// Used when confidence is high enough to skip neural model.
+    /// Returns logits (not probabilities) with Laplace smoothing.
+    pub fn predict_standalone(&self, logits: &mut [f32]) {
+        assert_eq!(logits.len(), self.vocab_size);
+
+        // Use the highest matching order
+        for order in (1..=self.max_order.min(self.history_len)).rev() {
+            let ctx_hash = self.context_hash(order);
+            if let Some(entry) = self.tables[order - 1].get(&ctx_hash) {
+                if entry.total == 0 { continue; }
+
+                let alpha = 0.01f32;
+                let denom = entry.total as f32 + alpha * self.vocab_size as f32;
+                let base_log_prob = (alpha / denom).ln();
+
+                // Set all logits to base (smoothed) log-probability
+                for l in logits.iter_mut() {
+                    *l = base_log_prob;
+                }
+
+                // Override with observed counts
+                for (&tok, &count) in &entry.counts {
+                    logits[tok as usize] = ((count as f32 + alpha) / denom).ln();
+                }
+                return;
+            }
+        }
+        // No match — leave logits at zero (will be uniform after softmax)
+    }
+
     fn context_hash(&self, order: usize) -> u64 {
         let mut hash = 0xcbf29ce484222325u64; // FNV-1a offset basis
         for i in 0..order {

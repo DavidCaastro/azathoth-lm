@@ -42,6 +42,7 @@ fn cmd_baseline(args: &[String]) {
     let mut weights_dir = "weights/rwkv7-0.1b".to_string();
     let mut max_bytes: usize = 0; // 0 = entire file
     let mut use_ensemble = false;
+    let mut skip_threshold: f32 = 0.0; // 0 = no skip; e.g. 0.95 = skip when 95% confident
 
     let mut i = 0;
     while i < args.len() {
@@ -50,6 +51,7 @@ fn cmd_baseline(args: &[String]) {
             "--weights" => { i += 1; weights_dir = args[i].clone(); }
             "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
             "--ensemble" => { use_ensemble = true; }
+            "--skip" => { i += 1; skip_threshold = args[i].parse().unwrap(); }
             _ => {}
         }
         i += 1;
@@ -61,7 +63,14 @@ fn cmd_baseline(args: &[String]) {
     let total_bytes = if max_bytes > 0 { max_bytes.min(raw_bytes.len()) } else { raw_bytes.len() };
     let input_slice = &raw_bytes[..total_bytes];
     eprintln!("[baseline] input: {} ({} bytes)", input_path, total_bytes);
-    eprintln!("[baseline] mode: {}", if use_ensemble { "ensemble (RWKV + N-gram + bias)" } else { "RWKV only" });
+    let mode_str = if !use_ensemble {
+        "RWKV only".to_string()
+    } else if skip_threshold > 0.0 {
+        format!("ensemble + skip (threshold={:.2})", skip_threshold)
+    } else {
+        "ensemble (RWKV + N-gram + bias)".to_string()
+    };
+    eprintln!("[baseline] mode: {}", mode_str);
 
     // Load tokenizer and model
     let model_path = Path::new(&weights_dir).join("model.safetensors");
@@ -102,17 +111,38 @@ fn cmd_baseline(args: &[String]) {
     eprintln!();
 
     let mut logits = crate::domain::tensor::Tensor::zeros(&[v]);
+    let mut skipped = 0usize;
+    let skip_active = skip_threshold > 0.0 && use_ensemble;
 
     for t in 0..tokens.len() {
         let tok = tokens[t] as usize;
 
         if t > 0 {
-            // Build ensemble logits
-            let mut ensemble_logits = logits.data.clone();
-            if use_ensemble {
-                ngram.predict(&mut ensemble_logits);
-                bias.apply(&mut ensemble_logits);
-            }
+            // Check confidence skip: can we use N-gram alone?
+            let (conf, _best_tok, _best_order) = if skip_active {
+                ngram.confidence()
+            } else {
+                (0.0, 0, 0)
+            };
+            let do_skip = skip_active && conf >= skip_threshold;
+
+            let ensemble_logits = if do_skip {
+                // Use N-gram standalone prediction (skip RWKV head)
+                skipped += 1;
+                let mut ng_logits = vec![0.0f32; v];
+                ngram.predict_standalone(&mut ng_logits);
+                // Still apply bias head
+                bias.apply(&mut ng_logits);
+                ng_logits
+            } else {
+                // Normal ensemble: RWKV + N-gram + bias
+                let mut el = logits.data.clone();
+                if use_ensemble {
+                    ngram.predict(&mut el);
+                    bias.apply(&mut el);
+                }
+                el
+            };
 
             // Compute probability of this token given context
             let ensemble_tensor = crate::domain::tensor::Tensor::from_data(
@@ -140,15 +170,21 @@ fn cmd_baseline(args: &[String]) {
             ngram.observe(tok as u32);
         }
 
+        // Always run RWKV forward to maintain state
         logits = model.forward(tok, &mut state);
+    }
+
+    if skip_active {
+        let pct = 100.0 * skipped as f64 / (tokens.len() - 1) as f64;
+        eprintln!("[baseline] confidence skip: {}/{} tokens skipped ({:.1}%)",
+                  skipped, tokens.len() - 1, pct);
     }
 
     tracker.final_report();
 
     eprintln!();
     eprintln!("[baseline] {} BPB on {}: {:.4}",
-              if use_ensemble { "ensemble" } else { "RWKV-only" },
-              input_path, tracker.bpb());
+              mode_str, input_path, tracker.bpb());
     eprintln!("[baseline] done.");
 }
 
