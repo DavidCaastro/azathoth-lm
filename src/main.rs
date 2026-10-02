@@ -32,7 +32,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  compress    --input PATH [--ckpt PATH]");
-    eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N]");
+    eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
 }
@@ -45,6 +45,7 @@ fn cmd_baseline(args: &[String]) {
     let mut skip_threshold: f32 = 0.0;
     let mut bias_lr: f32 = 0.001;
     let mut ngram_scale: f32 = 1.0; // multiplier on N-gram weights
+    let mut lr_tau: f32 = 0.0; // inverse decay time constant (0 = static)
 
     let mut i = 0;
     while i < args.len() {
@@ -56,6 +57,7 @@ fn cmd_baseline(args: &[String]) {
             "--skip" => { i += 1; skip_threshold = args[i].parse().unwrap(); }
             "--lr" => { i += 1; bias_lr = args[i].parse().unwrap(); }
             "--ngram-scale" => { i += 1; ngram_scale = args[i].parse().unwrap(); }
+            "--tau" => { i += 1; lr_tau = args[i].parse().unwrap(); }
             _ => {}
         }
         i += 1;
@@ -71,8 +73,10 @@ fn cmd_baseline(args: &[String]) {
         "RWKV only".to_string()
     } else if skip_threshold > 0.0 {
         format!("ensemble + skip (threshold={:.2})", skip_threshold)
+    } else if lr_tau > 0.0 {
+        format!("ensemble (lr={}, tau={}, scale={})", bias_lr, lr_tau, ngram_scale)
     } else {
-        "ensemble (RWKV + N-gram + bias)".to_string()
+        format!("ensemble (lr={}, scale={})", bias_lr, ngram_scale)
     };
     eprintln!("[baseline] mode: {}", mode_str);
 
@@ -105,7 +109,7 @@ fn cmd_baseline(args: &[String]) {
 
     // Initialize ensemble components
     let mut ngram = TokenNgram::new(4, v, ngram_scale);
-    let mut bias = BiasHead::new(v, bias_lr);
+    let mut bias = BiasHead::new(v, bias_lr).with_decay(lr_tau);
 
     // Run forward pass and measure cross-entropy
     let mut state = Rwkv7State::new(&model.config);
@@ -158,6 +162,12 @@ fn cmd_baseline(args: &[String]) {
             // Update online components AFTER measuring (no lookahead)
             if use_ensemble {
                 bias.update(&probs.data, tok);
+            }
+
+            // Update telemetry extra info
+            if use_ensemble && lr_tau > 0.0 {
+                let (eff_lr, ema_s) = bias.telemetry();
+                tracker.set_extra(format!("lr={:.4} surp={:.2}", eff_lr, ema_s));
             }
 
             // Distribute this token's bits across its bytes

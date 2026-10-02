@@ -9,6 +9,7 @@
 | Phase 0 — RWKV-7 only | 1.4691 | 0.1B f32+Q8head, 100KB |
 | Phase 0 — ensemble | 1.4086 | RWKV + N-gram(4) + bias head, 100KB |
 | Phase 0 — tuned ensemble | 1.3078 | lr=0.30, scale=0.5, 10KB |
+| Phase 0 — dynamic lr | 1.2997 | surprise-modulated tau=2000, 10KB |
 
 100KB "quick" eval. Full enwik8 pending throughput optimization (85 B/s → ~327h).
 
@@ -20,7 +21,9 @@
 1.58  analytic-lm (54 CM + LSTM, our predecessor)
 1.50  PPM
 1.41  azathoth-lm ensemble (RWKV+N-gram+bias, 100KB quick)
+1.33  azathoth-lm tuned static (lr=0.30, scale=0.5, 100KB)
 1.31  azathoth-lm tuned (lr=0.30, scale=0.5, 10KB)
+1.30  azathoth-lm dynamic lr (surprise-mod tau=2000, 10KB)
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
 1.17  cmix        (2077 models + LSTM)
@@ -40,6 +43,8 @@
 | BPB ensemble (enwik8 100KB) | 1.4086 | 2026-10-01 |
 | BPB ensemble (enwik8 10KB) | 1.3758 | 2026-10-01 |
 | BPB tuned ensemble (enwik8 10KB) | 1.3078 | 2026-10-02 |
+| BPB dynamic lr (enwik8 10KB) | 1.2997 | 2026-10-02 |
+| BPB tuned static (enwik8 100KB) | 1.3281 | 2026-10-02 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
 | bytes/s | 85 | 2026-10-01 |
 | MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
@@ -111,3 +116,19 @@ See `docs/research/r05-scaling-analysis.md` for full analysis.
 lr curve monotonically improving through 0.30 — not yet saturated on 10KB.
 Dynamic lr (inverse decay) strongly motivated for longer evaluations.
 See `docs/research/r06-hyperparameter-tuning.md` for full analysis.
+
+## Surprise-Modulated Dynamic LR (R07, 2026-10-02)
+
+Replaced blind inverse decay with data-driven surprise-modulated lr:
+`lr(t) = lr0 * clamp(surprise / ema_surprise, 0.1, 5.0)`
+
+| Config | BPB (10KB) | vs static |
+|---|---|---|
+| Static lr=0.30 | 1.3078 | baseline |
+| Inverse decay (best) | 1.3066 | -0.001 |
+| **Surprise tau=2000** | **1.2997** | **-0.008** |
+
+Surprise modulation is 8x more effective than inverse decay.
+Static lr=0.30 degrades to 1.3281 on 100KB — surprise-modulated should scale better.
+100KB validation in progress.
+See `docs/research/r07-dynamic-lr.md` for full analysis.

@@ -12,6 +12,7 @@ pub struct ProgressTracker {
     start_time: Instant,
     last_report_bytes: usize,
     report_interval: usize,
+    extra: String,
 }
 
 impl ProgressTracker {
@@ -29,6 +30,7 @@ impl ProgressTracker {
             start_time: Instant::now(),
             last_report_bytes: 0,
             report_interval,
+            extra: String::new(),
         }
     }
 
@@ -43,6 +45,11 @@ impl ProgressTracker {
             self.report();
             self.last_report_bytes = self.processed_bytes;
         }
+    }
+
+    /// Set extra telemetry info to display in progress reports.
+    pub fn set_extra(&mut self, extra: String) {
+        self.extra = extra;
     }
 
     pub fn bpb(&self) -> f64 {
@@ -63,10 +70,17 @@ impl ProgressTracker {
 
         let timestamp = now_barcelona();
 
-        eprintln!(
-            "[{}] {:5.1}% | BPB {:.4} | {:.0} B/s | ETA {}h{:02}m{:02}s",
-            timestamp, pct, bpb, bps, eta_h, eta_m, eta_s,
-        );
+        if self.extra.is_empty() {
+            eprintln!(
+                "[{}] {:5.1}% | BPB {:.4} | {:.0} B/s | ETA {}h{:02}m{:02}s",
+                timestamp, pct, bpb, bps, eta_h, eta_m, eta_s,
+            );
+        } else {
+            eprintln!(
+                "[{}] {:5.1}% | BPB {:.4} | {:.0} B/s | ETA {}h{:02}m{:02}s | {}",
+                timestamp, pct, bpb, bps, eta_h, eta_m, eta_s, self.extra,
+            );
+        }
     }
 
     pub fn final_report(&self) {
