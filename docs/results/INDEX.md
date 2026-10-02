@@ -196,3 +196,10 @@ Static lr sweep on 100KB (scale=0.5):
 **lr=0.30 confirmed optimal on 100KB.** Mixer is the only adaptive approach that
 doesn't degrade on 100KB, but improvement is negligible (-0.0003).
 See `docs/research/r08-adaptive-mixer.md` for full analysis.
+
+## Roadmap
+
+Prioritized next actions in `docs/ROADMAP.md`. Key phases:
+1. **Phase 1**: CDF-24, N-gram 5-6, confidence skip, full enwik8
+2. **Phase 2**: Context mixing models, LSTM mixer, byte-level path
+3. **Phase 3**: Domain-matched checkpoint, SA-PPM, hierarchical mixer

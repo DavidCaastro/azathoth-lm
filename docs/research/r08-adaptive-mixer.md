@@ -274,7 +274,4 @@ and scales correctly. Further eta sweep on 100KB in progress.
 
 ### Next Directions
 
-1. **Eta sweep on 100KB** (0.002, 0.005, 0.02) to find true optimum
-2. **Full enwik8 benchmark** with mixer (eta ~0.001 estimated for 100MB)
-3. **CDF-24 arithmetic coder** — largest untapped gain
-4. **Confidence skip** — speed optimization without BPB loss
+Eta sweep COMPLETE. See `docs/ROADMAP.md` for prioritized next actions.
