@@ -119,8 +119,8 @@ Surprise modulation is **8x more effective** than inverse decay.
 |---|---|---|---|
 | Static lr=0.30, scale=0.5 | **1.3281** | -0.081 | baseline |
 | Surprise tau=1000 | 1.3320 | -0.077 | **+0.004 (WORSE)** |
-| Surprise tau=5000 | *pending* | — | — |
-| Surprise tau=10000 | *pending* | — | — |
+| Surprise tau=5000 | 1.3316 | -0.077 | +0.004 (worse) |
+| Surprise tau=10000 | 1.3327 | -0.076 | +0.005 (worse) |
 
 **CRITICAL FINDING**: Surprise modulation with tau=1000 is WORSE on 100KB than
 static. The 10KB improvement was partially an artifact of EMA initialization.
@@ -233,12 +233,23 @@ Progress reports show `lr=X.XXXX surp=Y.YY` when tau > 0.
 5. **Inverse decay was marginal too**: -0.001 BPB at best
 6. **Static lr=0.30 remains best for 100KB**: 1.3281 BPB
 
-### Status: NEEDS REDESIGN
+### Status: KILLED
 
-The current surprise modulation does not scale. Before iterating, need to:
-- Fix EMA initialization (first token's surprise, not 1.0)
-- Test much larger tau (5000-10000) on 100KB
-- Consider whether surprise should DECREASE lr (dampen on hard tokens)
-  rather than increase it (current behavior)
-- Evaluate if the whole approach has merit vs just using a lower static lr
-  for longer corpora (e.g., lr=0.15 for 100KB, lr=0.30 for 10KB)
+Surprise modulation does not scale to 100KB regardless of tau.
+All tau values tested (1000, 5000, 10000) produce worse BPB than static lr=0.30.
+
+The mechanism has a fundamental flaw: it amplifies lr when surprise exceeds
+the running average, but on enwik8, hard tokens are frequent enough that
+the effective lr stays persistently above lr0. This extra aggressiveness
+hurts on longer data where bias accumulation matters.
+
+**No system in the literature uses surprise-modulated lr for compression.**
+Nacrith, StateSMix, PAQ8, and cmix all use fixed learning rates.
+The adaptive components in successful systems modulate **model weights**
+or **component contributions**, not the lr of online gradient descent.
+
+### Next Direction
+
+1. Find optimal static lr for 100KB (sweep lr=0.05-0.20)
+2. Investigate StateSMix-style entropy-adaptive N-gram scaling
+3. Keep surprise modulation code for reference but default to static (tau=0)

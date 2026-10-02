@@ -45,7 +45,7 @@
 | BPB tuned ensemble (enwik8 10KB) | 1.3078 | 2026-10-02 |
 | BPB dynamic lr (enwik8 10KB) | 1.2997 | 2026-10-02 |
 | BPB tuned static (enwik8 100KB) | 1.3281 | 2026-10-02 |
-| BPB surprise tau=1000 (enwik8 100KB) | 1.3320 | 2026-10-02 |
+| BPB surprise tau=1000 (enwik8 100KB) | 1.3320 | 2026-10-02 (KILLED) |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
 | bytes/s | 85 | 2026-10-01 |
 | MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
@@ -137,6 +137,10 @@ actual ~4.0). Mechanism amplifies lr above lr0 on enwik8. Needs redesign.
 |---|---|---|
 | Static lr=0.30 | 1.3078 | **1.3281** |
 | Surprise tau=1000 | 1.3002 | 1.3320 (worse) |
-| Surprise tau=2000 | **1.2997** | *pending* |
+| Surprise tau=2000 | **1.2997** | — |
+| Surprise tau=5000 | 1.3007 | 1.3316 (worse) |
+| Surprise tau=10000 | — | 1.3327 (worse) |
 
+**KILLED**: Surprise modulation does not scale to 100KB at any tau.
+Static lr=0.30 remains best for 100KB. Next: find optimal static lr for 100KB.
 See `docs/research/r07-dynamic-lr.md` for full analysis.
