@@ -48,7 +48,7 @@
 | BPB tuned static (enwik8 100KB) | 1.3281 | 2026-10-02 |
 | BPB surprise tau=1000 (enwik8 100KB) | 1.3320 | 2026-10-02 (KILLED) |
 | BPB mixer eta=0.10 (enwik8 10KB) | 1.2997 | 2026-10-02 |
-| BPB mixer eta=0.10 (enwik8 100KB) | pending | 2026-10-02 |
+| BPB mixer eta=0.10 (enwik8 100KB) | ~1.38 (partial@50%) | 2026-10-02 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
 | bytes/s | 85 | 2026-10-01 |
 | MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
@@ -165,5 +165,20 @@ Eta sweep on 10KB (lr=0.30, scale=0.5):
 | 0.10 | 1.2997 | -0.0081 |
 
 Best 10KB: **1.2997 BPB** (eta=0.10). Monotonically improving — same pattern as
-surprise lr (R07). 100KB validation pending — critical to confirm scaling.
+surprise lr (R07).
+
+100KB partial telemetry (eta=0.10, at 50%): BPB **1.3846** — significantly worse
+than static 1.3281. Weights grow >1.0 (w_ng=1.14, w_b=1.12), amplifying noise.
+Full 100KB validation running to confirm.
+
+Static lr sweep on 100KB (scale=0.5):
+
+| lr | BPB (100KB) | vs lr=0.30 (1.3281) |
+|---|---|---|
+| 0.05 | 1.3571 | +0.0290 |
+| 0.10 | 1.3448 | +0.0167 |
+| 0.15 | 1.3379 | +0.0098 |
+| 0.30 | **1.3281** | baseline (best) |
+
+**lr=0.30 confirmed optimal on 100KB.** All adaptive approaches degrade on 100KB.
 See `docs/research/r08-adaptive-mixer.md` for full analysis.
