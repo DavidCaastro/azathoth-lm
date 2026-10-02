@@ -197,22 +197,60 @@ Affected weights: w1/w2, a1/a2, v1/v2, g1/g2 (8 tensors per layer).
 This bug existed since the BlinkDL loader was written but was never
 triggered because only HF-format models were used.
 
-### 5.4 Revised Strategy
+### 5.4 KILL: G1k 1.5B Also Failed (2026-10-02)
 
-The 0.4B path is blocked by checkpoint availability. Options:
+**G1k 1.5B produces catastrophically worse BPB than 0.1B on enwik8:**
+
+| Checkpoint | BPB (10KB) | vs 0.1B |
+|---|---|---|
+| RWKV-7 0.1B World (fla-hub) | **1.4298** | baseline |
+| RWKV-7 G1k 1.5B (BlinkDL) | **5.2691** | **+3.84** (3.7x worse) |
+
+Kill criteria triggered: BPB > 1.30 by enormous margin.
+
+**Verification**: Forward pass validated token-by-token against Python
+reference implementation. Logits match within Q8 head noise (~0.02-0.03).
+BPB also confirmed bad in Python (6.5 BPB on first 133 bytes). The model
+genuinely assigns near-zero probability to correct enwik8 tokens.
+
+**Root cause**: The G1k checkpoint is trained on a data mixture that does
+not align with enwik8 (Wikipedia XML markup + English prose). Despite being
+"80% English", the training distribution is incompatible with enwik8's
+specific domain. The fla-hub 0.1B "World" model, despite being 15x smaller,
+was trained on data more representative of this domain.
+
+### 5.5 Revised Strategy (Final)
+
+All available checkpoints larger than 0.1B perform WORSE on enwik8:
+
+| Checkpoint | Params | BPB (10KB) | Status |
+|---|---|---|---|
+| RWKV-7 0.1B World (fla-hub) | 100M | **1.4298** | Best available |
+| RWKV-7 0.4B World v2.9 | 400M | 1.6549 | KILLED |
+| RWKV-7 G1d 0.4B | 400M | 1.8817 | KILLED |
+| RWKV-7 G1k 1.5B | 1.5B | 5.2691 | KILLED |
+
+**Conclusion**: Scaling via available RWKV-7 checkpoints is a dead end.
+The Pile-trained checkpoints from the paper (PPL 7.2 at 421M) are not
+publicly available.
+
+Options remaining:
 
 | Option | BPB est. | Feasibility | Risk |
 |---|---|---|---|
-| A: Stay with 0.1B, maximize ensemble | 1.20-1.35 | High | Can't reach sub-1.0 |
-| B: RWKV-7 G1k 1.5B (F32, ~6 GB) | 0.85-1.00 | Medium | Throughput: ~550 ms/tok |
-| C: Fine-tune 0.4B on English/Wikipedia | 1.00-1.15 | Low | Need training infra |
-| D: Pile-trained RWKV-7 168M | 1.10-1.25 | Medium | Different tokenizer |
+| A: 0.1B + maximized ensemble | 1.20-1.35 | **High** | Can't reach sub-1.0 |
+| B: Fine-tune 0.1B on enwik8-domain | 1.10-1.25 | Low | Need training infra |
+| C: Port to SmolLM2-135M (transformer) | 0.94-1.10 | Medium | O(context) memory |
+| D: Find/train Pile-focused RWKV-7 | 0.85-1.05 | Low | Time-intensive |
 
-**Decision: Go directly to G1k 1.5B.**
+**Decision: Option A — maximize 0.1B ensemble.**
 
-The 0.1B cannot reach sub-1.0 even with a perfect ensemble (~1.10 BPB
-ceiling). The G1k 1.5B is the only available checkpoint that is both
-well-trained (Sep 2026, 80% English) and large enough to close the gap.
+Rationale:
+- The 0.1B model works (1.43 BPB baseline, 1.38 with ensemble)
+- Ensemble delta increases with data (-0.054 at 10KB, -0.061 at 100KB)
+- Confidence skip + tuned N-gram + CDF-24 could push to ~1.20
+- This path requires only engineering, not new model procurement
+- Sub-1.0 is not achievable but significant improvement is possible
 
 ### G1k 1.5B Specifications
 

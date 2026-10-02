@@ -27,8 +27,8 @@
 0.97  fx2-cmix    (6M Transformer + 2000+ CM)
 0.94  Nacrith     (135M SmolLM2 + CM)
 ~1.25 ← PROJECTED azathoth-lm (0.1B + tuned ensemble + skip)
-~0.95 ← PROJECTED azathoth-lm (G1k 1.5B + ensemble, if viable)
-<1.0  ← OUR TARGET
+~0.95 ← KILLED: G1k 1.5B = 5.27 BPB (domain mismatch)
+<1.0  ← OUR TARGET (requires domain-matched checkpoint)
 ```
 
 ## Benchmark Dashboard
@@ -87,9 +87,11 @@ See R03/R04 for optimization path (VNNI kernel, confidence skip).
 | RWKV-7 0.1B World (current) | **1.4298** | Best available |
 | RWKV-7 0.4B World v2.9 | 1.6549 | KILLED — worse than 0.1B |
 | RWKV-7 G1d 0.4B | 1.8817 | KILLED — under-trained |
-| RWKV-7 G1k 1.5B (not tested) | ~0.85-1.00 est. | Next candidate |
+| RWKV-7 G1k 1.5B | **5.2691** | KILLED — catastrophic domain mismatch |
 
-0.4B scaling hypothesis failed: no available checkpoint beats 0.1B.
-Root cause: Pile-trained 0.4B not public; World/G1d checkpoints under-trained.
-Next: maximize 0.1B ensemble, then evaluate G1k 1.5B.
+**All scaling paths KILLED.** No available RWKV-7 checkpoint larger than
+0.1B outperforms it on enwik8. G1k 1.5B verified correct (forward pass
+matches Python reference) but its training data is incompatible with enwik8.
+
+Strategy: maximize 0.1B ensemble (confidence skip, tuned N-gram, CDF-24).
 See `docs/research/r05-scaling-analysis.md` for full analysis.

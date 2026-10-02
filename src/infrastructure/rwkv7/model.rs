@@ -249,6 +249,7 @@ impl Rwkv7Model {
             let cm_out = channel_mixing(&xx, &state.x_prev_ffn[i], &lw.channel_mix);
             state.x_prev_ffn[i] = xx;
             x = add(&x, &cm_out);
+
         }
 
         // Final LayerNorm + head projection (Q8)
