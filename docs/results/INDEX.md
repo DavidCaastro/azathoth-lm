@@ -111,8 +111,8 @@ See `docs/research/r05-scaling-analysis.md` for full analysis.
 
 | Parameter | Default | Optimal | Impact |
 |---|---|---|---|
-| bias_lr | 0.001 | 0.30 | -0.055 BPB (dominant) |
-| ngram_scale | 1.0 | 0.5 | -0.013 BPB (consistent) |
+| bias_lr | 0.001 | 0.30 | -0.0680 BPB (dominant) |
+| ngram_scale | 1.0 | 0.5 | -0.0131 BPB (consistent) |
 
 lr curve monotonically improving through 0.30 — not yet saturated on 10KB.
 Dynamic lr (inverse decay) strongly motivated for longer evaluations.
@@ -126,10 +126,10 @@ Replaced blind inverse decay with data-driven surprise-modulated lr:
 | Config | BPB (10KB) | vs static |
 |---|---|---|
 | Static lr=0.30 | 1.3078 | baseline |
-| Inverse decay (best) | 1.3066 | -0.001 |
-| **Surprise tau=2000** | **1.2997** | **-0.008** |
+| Inverse decay (best) | 1.3066 | -0.0012 |
+| **Surprise tau=2000** | **1.2997** | **-0.0081** |
 
-Surprise modulation improves 10KB (-0.008 BPB) but **degrades 100KB** (+0.004).
+Surprise modulation improves 10KB (-0.0081 BPB) but **degrades 100KB** (+0.0039).
 10KB gain is partially an EMA initialization artifact (starts at 1.0 nat vs
 actual ~4.0). Mechanism amplifies lr above lr0 on enwik8. Needs redesign.
 

@@ -85,8 +85,8 @@ data to form reliable corrections.
 | 100 | 1.3069 | -0.001 | 0.50 | 3.90 |
 | 200 | 1.3046 | -0.003 | 0.50 | 3.90 |
 | 500 | 1.3018 | -0.006 | 0.55 | 3.56 |
-| 1000 | 1.3002 | -0.008 | 0.67 | 2.98 |
-| **2000** | **1.2997** | **-0.008** | — | — |
+| 1000 | 1.3002 | -0.0076 | 0.67 | 2.98 |
+| **2000** | **1.2997** | **-0.0081** | — | — |
 | 5000 | 1.3007 | -0.007 | — | — |
 
 **Optimal tau ≈ 2000** on 10KB. Best: **1.2997 BPB** (-0.076 vs default 1.3758).
@@ -108,19 +108,19 @@ already pushes effective lr above lr0 when needed.
 | Method | Best BPB | Best Config | vs Static |
 |---|---|---|---|
 | Static | 1.3078 | lr=0.30 | baseline |
-| Inverse decay | 1.3066 | lr=0.50 tau=3000 | -0.001 |
-| **Surprise-modulated** | **1.2997** | **lr=0.30 tau=2000** | **-0.008** |
+| Inverse decay | 1.3066 | lr=0.50 tau=3000 | -0.0012 |
+| **Surprise-modulated** | **1.2997** | **lr=0.30 tau=2000** | **-0.0081** |
 
-Surprise modulation is **8x more effective** than inverse decay.
+Surprise modulation is **~7x more effective** than inverse decay.
 
 ### 4.4 100KB enwik8 — Validation
 
 | Config | BPB | vs default (1.4086) | vs static 100KB |
 |---|---|---|---|
 | Static lr=0.30, scale=0.5 | **1.3281** | -0.081 | baseline |
-| Surprise tau=1000 | 1.3320 | -0.077 | **+0.004 (WORSE)** |
-| Surprise tau=5000 | 1.3316 | -0.077 | +0.004 (worse) |
-| Surprise tau=10000 | 1.3327 | -0.076 | +0.005 (worse) |
+| Surprise tau=1000 | 1.3320 | -0.0766 | **+0.0039 (WORSE)** |
+| Surprise tau=5000 | 1.3316 | -0.0770 | +0.0035 (worse) |
+| Surprise tau=10000 | 1.3327 | -0.0759 | +0.0046 (worse) |
 
 **CRITICAL FINDING**: Surprise modulation with tau=1000 is WORSE on 100KB than
 static. The 10KB improvement was partially an artifact of EMA initialization.
