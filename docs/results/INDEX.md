@@ -45,6 +45,7 @@
 | BPB tuned ensemble (enwik8 10KB) | 1.3078 | 2026-10-02 |
 | BPB dynamic lr (enwik8 10KB) | 1.2997 | 2026-10-02 |
 | BPB tuned static (enwik8 100KB) | 1.3281 | 2026-10-02 |
+| BPB surprise tau=1000 (enwik8 100KB) | 1.3320 | 2026-10-02 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
 | bytes/s | 85 | 2026-10-01 |
 | MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
@@ -128,7 +129,14 @@ Replaced blind inverse decay with data-driven surprise-modulated lr:
 | Inverse decay (best) | 1.3066 | -0.001 |
 | **Surprise tau=2000** | **1.2997** | **-0.008** |
 
-Surprise modulation is 8x more effective than inverse decay.
-Static lr=0.30 degrades to 1.3281 on 100KB — surprise-modulated should scale better.
-100KB validation in progress.
+Surprise modulation improves 10KB (-0.008 BPB) but **degrades 100KB** (+0.004).
+10KB gain is partially an EMA initialization artifact (starts at 1.0 nat vs
+actual ~4.0). Mechanism amplifies lr above lr0 on enwik8. Needs redesign.
+
+| Config | BPB 10KB | BPB 100KB |
+|---|---|---|
+| Static lr=0.30 | 1.3078 | **1.3281** |
+| Surprise tau=1000 | 1.3002 | 1.3320 (worse) |
+| Surprise tau=2000 | **1.2997** | *pending* |
+
 See `docs/research/r07-dynamic-lr.md` for full analysis.

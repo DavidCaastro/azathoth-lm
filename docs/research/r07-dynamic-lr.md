@@ -115,14 +115,48 @@ Surprise modulation is **8x more effective** than inverse decay.
 
 ### 4.4 100KB enwik8 — Validation
 
-| Config | BPB | vs default (1.4086) |
-|---|---|---|
-| Static lr=0.30, scale=0.5 | 1.3281 | -0.081 |
-| Surprise tau=1000, lr=0.30, scale=0.5 | *pending* | *pending* |
+| Config | BPB | vs default (1.4086) | vs static 100KB |
+|---|---|---|---|
+| Static lr=0.30, scale=0.5 | **1.3281** | -0.081 | baseline |
+| Surprise tau=1000 | 1.3320 | -0.077 | **+0.004 (WORSE)** |
+| Surprise tau=5000 | *pending* | — | — |
+| Surprise tau=10000 | *pending* | — | — |
 
-Note: static lr=0.30 degrades from 10KB (1.3078) to 100KB (1.3281) — confirming
-that high static lr oscillates on longer data. The surprise-modulated version
-should handle this better as lr self-regulates.
+**CRITICAL FINDING**: Surprise modulation with tau=1000 is WORSE on 100KB than
+static. The 10KB improvement was partially an artifact of EMA initialization.
+
+### 4.5 Root Cause Analysis
+
+The EMA initializes at 1.0 nat but actual enwik8 surprise is ~3.5-4.0 nats.
+With tau=1000 (alpha=0.001), convergence takes ~3000 tokens.
+
+On **10KB** (3000 tokens): the entire evaluation runs with EMA still converging.
+The ratio `surprise(~4.0) / ema(~1.0→3.5)` pushes lr above lr0, creating an
+accidental "high lr early" effect that happens to help.
+
+On **100KB** (25K tokens): the EMA converges by ~12% of the data. After that,
+the ratio oscillates around 1.0-1.8, keeping effective lr at 0.34-0.54 — higher
+than the static 0.30 that's already too aggressive for 100KB.
+
+Telemetry confirms: lr stays ABOVE lr0 throughout the 100KB run.
+```
+100KB tau=1000:
+25% | lr=0.3947 surp=3.98
+50% | lr=0.3397 surp=4.03
+75% | lr=0.5377 surp=3.58
+```
+
+### 4.6 Implications
+
+1. The 10KB result (1.2997) is partially a lucky initialization artifact
+2. Surprise modulation amplifies lr when surprise > ema — but on enwik8,
+   surprise is OFTEN above average (hard tokens dominate gradient)
+3. The mechanism needs one or more fixes:
+   - Initialize EMA to first token's actual surprise (remove artifact)
+   - Use lower lr0 so the amplified lr is still safe for long runs
+   - Use much larger tau (5000-10000) for slower EMA tracking
+   - Reverse the modulation: lr should DECREASE with surprise to prevent
+     overcorrection on hard tokens (counterintuitive but possibly correct)
 
 ## 5. Telemetry Observations
 
@@ -190,9 +224,21 @@ Progress reports show `lr=X.XXXX surp=Y.YY` when tau > 0.
 
 ## 8. Conclusions
 
-1. **Surprise-modulated lr works**: -0.008 BPB vs best static on 10KB
-2. **8x better than inverse decay**: data-driven > blind schedule
-3. **Emergent warmup**: EMA initialization creates beneficial warmup period
-4. **Scaling hypothesis**: tau optimal grows with corpus size — to be validated on 100KB
-5. **Total improvement from default**: 1.3758 → 1.2997 = **-0.076 BPB** (-5.5%)
-6. **Next**: validate on 100KB, investigate per-token Adagrad, adaptive tau
+1. **Surprise-modulated lr improves 10KB**: -0.008 BPB vs best static
+2. **But DEGRADES 100KB**: +0.004 BPB vs static — does not scale
+3. **10KB gain is partially an initialization artifact**: EMA starts at 1.0 nat
+   vs actual ~4.0 nats, creating accidental "high lr early" boost
+4. **The mechanism amplifies lr above lr0**: on enwik8, surprise is frequently
+   above average, so lr stays elevated — harmful for long runs
+5. **Inverse decay was marginal too**: -0.001 BPB at best
+6. **Static lr=0.30 remains best for 100KB**: 1.3281 BPB
+
+### Status: NEEDS REDESIGN
+
+The current surprise modulation does not scale. Before iterating, need to:
+- Fix EMA initialization (first token's surprise, not 1.0)
+- Test much larger tau (5000-10000) on 100KB
+- Consider whether surprise should DECREASE lr (dampen on hard tokens)
+  rather than increase it (current behavior)
+- Evaluate if the whole approach has merit vs just using a lower static lr
+  for longer corpora (e.g., lr=0.15 for 100KB, lr=0.30 for 10KB)
