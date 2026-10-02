@@ -4,9 +4,10 @@ mod infrastructure;
 
 use std::path::Path;
 
-use crate::domain::tensor::softmax;
+use crate::domain::tensor::{softmax, entropy_from_logits};
 use crate::domain::ngram::TokenNgram;
 use crate::domain::bias_head::BiasHead;
+use crate::domain::mixer::AdaptiveMixer;
 use crate::application::telemetry::ProgressTracker;
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
@@ -45,7 +46,10 @@ fn cmd_baseline(args: &[String]) {
     let mut skip_threshold: f32 = 0.0;
     let mut bias_lr: f32 = 0.001;
     let mut ngram_scale: f32 = 1.0; // multiplier on N-gram weights
-    let mut lr_tau: f32 = 0.0; // inverse decay time constant (0 = static)
+    let mut lr_tau: f32 = 0.0; // surprise modulation smoothness (0 = static)
+    let mut adaptive_ngram = false; // StateSMix-style entropy-adaptive N-gram
+    let mut use_mix = false; // adaptive component weighting
+    let mut mix_eta: f32 = 0.01; // mixer learning rate
 
     let mut i = 0;
     while i < args.len() {
@@ -58,6 +62,9 @@ fn cmd_baseline(args: &[String]) {
             "--lr" => { i += 1; bias_lr = args[i].parse().unwrap(); }
             "--ngram-scale" => { i += 1; ngram_scale = args[i].parse().unwrap(); }
             "--tau" => { i += 1; lr_tau = args[i].parse().unwrap(); }
+            "--adaptive" => { adaptive_ngram = true; }
+            "--mix" => { use_mix = true; use_ensemble = true; }
+            "--mix-eta" => { i += 1; mix_eta = args[i].parse().unwrap(); use_mix = true; use_ensemble = true; }
             _ => {}
         }
         i += 1;
@@ -73,6 +80,10 @@ fn cmd_baseline(args: &[String]) {
         "RWKV only".to_string()
     } else if skip_threshold > 0.0 {
         format!("ensemble + skip (threshold={:.2})", skip_threshold)
+    } else if use_mix {
+        format!("ensemble mix (lr={}, scale={}, eta={})", bias_lr, ngram_scale, mix_eta)
+    } else if adaptive_ngram {
+        format!("ensemble adaptive (lr={}, scale={})", bias_lr, ngram_scale)
     } else if lr_tau > 0.0 {
         format!("ensemble (lr={}, tau={}, scale={})", bias_lr, lr_tau, ngram_scale)
     } else {
@@ -110,6 +121,7 @@ fn cmd_baseline(args: &[String]) {
     // Initialize ensemble components
     let mut ngram = TokenNgram::new(4, v, ngram_scale);
     let mut bias = BiasHead::new(v, bias_lr).with_decay(lr_tau);
+    let mut mixer = AdaptiveMixer::new(mix_eta);
 
     // Run forward pass and measure cross-entropy
     let mut state = Rwkv7State::new(&model.config);
@@ -142,11 +154,26 @@ fn cmd_baseline(args: &[String]) {
                 // Still apply bias head
                 bias.apply(&mut ng_logits);
                 ng_logits
+            } else if use_mix {
+                // Adaptive mixer: compute components separately, combine with learned weights
+                let h = if adaptive_ngram {
+                    Some(entropy_from_logits(&logits.data))
+                } else {
+                    None
+                };
+                let ng_bias = ngram.compute_bias(h);
+                let b_vec = bias.bias_vector();
+                mixer.combine(&logits.data, &ng_bias, b_vec)
             } else {
                 // Normal ensemble: RWKV + N-gram + bias
                 let mut el = logits.data.clone();
                 if use_ensemble {
-                    ngram.predict(&mut el);
+                    let h = if adaptive_ngram {
+                        Some(entropy_from_logits(&logits.data))
+                    } else {
+                        None
+                    };
+                    ngram.predict(&mut el, h);
                     bias.apply(&mut el);
                 }
                 el
@@ -160,14 +187,32 @@ fn cmd_baseline(args: &[String]) {
             let prob = probs.data[tok] as f64;
 
             // Update online components AFTER measuring (no lookahead)
-            if use_ensemble {
+            if use_mix {
+                // Update mixer weights based on component contributions
+                let h = if adaptive_ngram {
+                    Some(entropy_from_logits(&logits.data))
+                } else {
+                    None
+                };
+                let ng_bias = ngram.compute_bias(h);
+                let b_vec = bias.bias_vector();
+                mixer.update(&probs.data, &ng_bias, b_vec, tok);
+                bias.update(&probs.data, tok);
+            } else if use_ensemble {
                 bias.update(&probs.data, tok);
             }
 
             // Update telemetry extra info
-            if use_ensemble && lr_tau > 0.0 {
+            if use_mix {
+                tracker.set_extra(format!("w_ng={:.3} w_b={:.3}", mixer.w_ngram, mixer.w_bias));
+            } else if use_ensemble && lr_tau > 0.0 {
                 let (eff_lr, ema_s) = bias.telemetry();
                 tracker.set_extra(format!("lr={:.4} surp={:.2}", eff_lr, ema_s));
+            } else if use_ensemble && adaptive_ngram {
+                let h = entropy_from_logits(&logits.data);
+                let beta = 0.6f32;
+                let s = ((1.0 - beta) + beta * (h / 5.5)).clamp(0.2, 2.5);
+                tracker.set_extra(format!("H={:.2} s={:.3}", h, s * ngram_scale));
             }
 
             // Distribute this token's bits across its bytes

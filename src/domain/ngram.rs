@@ -66,16 +66,27 @@ impl TokenNgram {
     }
 
     /// Produce logit biases for next-token prediction.
-    /// Returns a Vec<f32> of size vocab_size with log-probability biases.
-    /// Zero bias = no information from N-gram.
-    /// Mixes orders via interpolation: higher orders get more weight when available.
-    pub fn predict(&self, logits: &mut [f32]) {
+    /// `logits` are the RWKV logits (modified in-place).
+    /// `neural_entropy` if Some, enables StateSMix-style entropy-adaptive scaling:
+    ///   effective_scale = scale * clip((1-β) + β * H/H₀, 0.2, 2.5)
+    ///   where H = neural model entropy, H₀ = 5.5 nats, β = 0.6
+    /// If None, uses static `self.scale`.
+    pub fn predict(&self, logits: &mut [f32], neural_entropy: Option<f32>) {
         assert_eq!(logits.len(), self.vocab_size);
+
+        let effective_scale = match neural_entropy {
+            Some(h) => {
+                // StateSMix formula: s = clip((1-β) + β * H/H₀, s_min, s_max)
+                let beta = 0.6f32;
+                let h0 = 5.5f32; // reference entropy in nats
+                let s = (1.0 - beta) + beta * (h / h0);
+                self.scale * s.clamp(0.2, 2.5)
+            }
+            None => self.scale,
+        };
 
         // Interpolation weights per order (exponentially increasing)
         let weights: [f32; 4] = [0.05, 0.15, 0.30, 0.50];
-
-        let mut total_weight = 0.0f32;
 
         for order in 1..=self.max_order.min(self.history_len) {
             let ctx_hash = self.context_hash(order);
@@ -83,7 +94,6 @@ impl TokenNgram {
                 if entry.total == 0 { continue; }
 
                 let w = weights[(order - 1).min(3)];
-                total_weight += w;
 
                 // Add log-probability bias: log(count / total) weighted by w
                 // Laplace smoothing: (count + alpha) / (total + alpha * V)
@@ -93,13 +103,18 @@ impl TokenNgram {
                 for (&tok, &count) in &entry.counts {
                     let prob = (count as f32 + alpha) / denom;
                     let base_prob = alpha / denom;
-                    logits[tok as usize] += w * self.scale * (prob / base_prob).ln();
+                    logits[tok as usize] += w * effective_scale * (prob / base_prob).ln();
                 }
             }
         }
+    }
 
-        // If no N-gram data matched, logits remain unchanged (pure neural)
-        let _ = total_weight;
+    /// Compute the N-gram logit bias as a standalone vector (for adaptive mixer).
+    /// Returns Vec<f32> of size vocab_size with bias values.
+    pub fn compute_bias(&self, neural_entropy: Option<f32>) -> Vec<f32> {
+        let mut bias = vec![0.0f32; self.vocab_size];
+        self.predict(&mut bias, neural_entropy);
+        bias
     }
 
     /// Return the confidence of the best N-gram prediction.

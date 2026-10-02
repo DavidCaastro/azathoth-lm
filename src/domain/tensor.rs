@@ -324,3 +324,19 @@ pub fn softmax(x: &Tensor) -> Tensor {
     let data: Vec<f32> = exps.iter().map(|&v| v / sum).collect();
     Tensor::from_data(data, x.shape.clone())
 }
+
+/// Compute entropy H = -sum(p * ln(p)) from logits (in nats).
+/// Uses numerically stable softmax internally.
+pub fn entropy_from_logits(logits: &[f32]) -> f32 {
+    let max_val = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let exps: Vec<f32> = logits.iter().map(|&v| (v - max_val).exp()).collect();
+    let sum: f32 = exps.iter().sum();
+    let mut h = 0.0f32;
+    for &e in &exps {
+        let p = e / sum;
+        if p > 1e-30 {
+            h -= p * p.ln();
+        }
+    }
+    h
+}

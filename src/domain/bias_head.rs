@@ -70,6 +70,11 @@ impl BiasHead {
         (self.last_lr, self.ema_surprise)
     }
 
+    /// Expose the bias vector for adaptive mixer.
+    pub fn bias_vector(&self) -> &[f32] {
+        &self.bias
+    }
+
     /// Apply bias to logits (in-place addition).
     pub fn apply(&self, logits: &mut [f32]) {
         for (i, b) in self.bias.iter().enumerate() {
