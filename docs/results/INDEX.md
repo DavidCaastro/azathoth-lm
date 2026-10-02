@@ -10,7 +10,8 @@
 | Phase 0 — ensemble | 1.4086 | RWKV + N-gram(4) + bias head, 100KB |
 | Phase 0 — tuned ensemble | 1.3078 | lr=0.30, scale=0.5, 10KB |
 | Phase 0 — dynamic lr | 1.2997 | surprise-modulated tau=2000, 10KB (KILLED) |
-| Phase 0 — adaptive mixer | 1.2997 | learned weights eta=0.10, 10KB |
+| Phase 0 — adaptive mixer (10KB) | 1.2997 | learned weights eta=0.10, 10KB |
+| Phase 0 — adaptive mixer (100KB) | **1.3238** | learned weights eta=0.01, 100KB (BEST) |
 
 100KB "quick" eval. Full enwik8 pending throughput optimization (85 B/s → ~327h).
 
@@ -23,6 +24,7 @@
 1.50  PPM
 1.41  azathoth-lm ensemble (RWKV+N-gram+bias, 100KB quick)
 1.33  azathoth-lm tuned static (lr=0.30, scale=0.5, 100KB)
+1.32  azathoth-lm mixer (eta=0.01, lr=0.30, scale=0.5, 100KB)
 1.31  azathoth-lm tuned (lr=0.30, scale=0.5, 10KB)
 1.30  azathoth-lm dynamic lr (surprise-mod tau=2000, 10KB)
 1.27  PAQ8px      (200+ models)
@@ -49,6 +51,7 @@
 | BPB surprise tau=1000 (enwik8 100KB) | 1.3320 | 2026-10-02 (KILLED) |
 | BPB mixer eta=0.10 (enwik8 10KB) | 1.2997 | 2026-10-02 |
 | BPB mixer eta=0.10 (enwik8 100KB) | 1.3278 | 2026-10-02 |
+| BPB mixer eta=0.01 (enwik8 100KB) | 1.3238 | 2026-10-02 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
 | bytes/s | 85 | 2026-10-01 |
 | MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
@@ -167,9 +170,15 @@ Eta sweep on 10KB (lr=0.30, scale=0.5):
 Best 10KB: **1.2997 BPB** (eta=0.10). Monotonically improving — same pattern as
 surprise lr (R07).
 
-100KB final: **1.3278 BPB** (eta=0.10) — neutral vs static 1.3281 (-0.0003).
-Weights converged to w_ng≈2.0, w_b≈1.4 but BPB matched static at equilibrium.
-Only adaptive mechanism that doesn't degrade on 100KB, but gain is negligible.
+100KB results:
+
+| eta | BPB (100KB) | vs static (1.3281) |
+|---|---|---|
+| 0.01 | **1.3238** | **-0.0043** |
+| 0.10 | 1.3278 | -0.0003 |
+
+**Best: eta=0.01 → 1.3238 BPB (-0.0043 vs static).** Lower eta is better for
+100KB (more stable convergence). Only adaptive mechanism that improves on 100KB.
 
 Static lr sweep on 100KB (scale=0.5):
 
