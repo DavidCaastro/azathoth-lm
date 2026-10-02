@@ -42,7 +42,9 @@ fn cmd_baseline(args: &[String]) {
     let mut weights_dir = "weights/rwkv7-0.1b".to_string();
     let mut max_bytes: usize = 0; // 0 = entire file
     let mut use_ensemble = false;
-    let mut skip_threshold: f32 = 0.0; // 0 = no skip; e.g. 0.95 = skip when 95% confident
+    let mut skip_threshold: f32 = 0.0;
+    let mut bias_lr: f32 = 0.001;
+    let mut ngram_scale: f32 = 1.0; // multiplier on N-gram weights
 
     let mut i = 0;
     while i < args.len() {
@@ -52,6 +54,8 @@ fn cmd_baseline(args: &[String]) {
             "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
             "--ensemble" => { use_ensemble = true; }
             "--skip" => { i += 1; skip_threshold = args[i].parse().unwrap(); }
+            "--lr" => { i += 1; bias_lr = args[i].parse().unwrap(); }
+            "--ngram-scale" => { i += 1; ngram_scale = args[i].parse().unwrap(); }
             _ => {}
         }
         i += 1;
@@ -100,8 +104,8 @@ fn cmd_baseline(args: &[String]) {
                byte_offset, total_bytes);
 
     // Initialize ensemble components
-    let mut ngram = TokenNgram::new(4, v);
-    let mut bias = BiasHead::new(v, 0.001);
+    let mut ngram = TokenNgram::new(4, v, ngram_scale);
+    let mut bias = BiasHead::new(v, bias_lr);
 
     // Run forward pass and measure cross-entropy
     let mut state = Rwkv7State::new(&model.config);

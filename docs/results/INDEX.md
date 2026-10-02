@@ -8,6 +8,7 @@
 | (inherited) edge-lm | ~2.16 | WHT + multi-scale, own corpus |
 | Phase 0 — RWKV-7 only | 1.4691 | 0.1B f32+Q8head, 100KB |
 | Phase 0 — ensemble | 1.4086 | RWKV + N-gram(4) + bias head, 100KB |
+| Phase 0 — tuned ensemble | 1.3078 | lr=0.30, scale=0.5, 10KB |
 
 100KB "quick" eval. Full enwik8 pending throughput optimization (85 B/s → ~327h).
 
@@ -19,6 +20,7 @@
 1.58  analytic-lm (54 CM + LSTM, our predecessor)
 1.50  PPM
 1.41  azathoth-lm ensemble (RWKV+N-gram+bias, 100KB quick)
+1.31  azathoth-lm tuned (lr=0.30, scale=0.5, 10KB)
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
 1.17  cmix        (2077 models + LSTM)
@@ -37,6 +39,7 @@
 |---|---|---|
 | BPB ensemble (enwik8 100KB) | 1.4086 | 2026-10-01 |
 | BPB ensemble (enwik8 10KB) | 1.3758 | 2026-10-01 |
+| BPB tuned ensemble (enwik8 10KB) | 1.3078 | 2026-10-02 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
 | bytes/s | 85 | 2026-10-01 |
 | MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
@@ -95,3 +98,16 @@ matches Python reference) but its training data is incompatible with enwik8.
 
 Strategy: maximize 0.1B ensemble (confidence skip, tuned N-gram, CDF-24).
 See `docs/research/r05-scaling-analysis.md` for full analysis.
+
+## Hyperparameter Tuning (R06, 2026-10-02)
+
+24-config sweep on enwik8 10KB. Best: **lr=0.30, scale=0.5 → 1.3078 BPB**.
+
+| Parameter | Default | Optimal | Impact |
+|---|---|---|---|
+| bias_lr | 0.001 | 0.30 | -0.055 BPB (dominant) |
+| ngram_scale | 1.0 | 0.5 | -0.013 BPB (consistent) |
+
+lr curve monotonically improving through 0.30 — not yet saturated on 10KB.
+Dynamic lr (inverse decay) strongly motivated for longer evaluations.
+See `docs/research/r06-hyperparameter-tuning.md` for full analysis.

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 pub struct TokenNgram {
     max_order: usize,
     vocab_size: usize,
+    scale: f32, // multiplier on logit bias weights
     // For each order, a map from context hash → count distribution
     // Key: hash of last `order` tokens. Value: (token → count) map + total count.
     tables: Vec<HashMap<u64, NgramEntry>>,
@@ -28,11 +29,12 @@ struct NgramEntry {
 }
 
 impl TokenNgram {
-    pub fn new(max_order: usize, vocab_size: usize) -> Self {
+    pub fn new(max_order: usize, vocab_size: usize, scale: f32) -> Self {
         let tables = (0..max_order).map(|_| HashMap::new()).collect();
         Self {
             max_order,
             vocab_size,
+            scale,
             tables,
             history: Vec::with_capacity(max_order),
             history_len: 0,
@@ -91,8 +93,7 @@ impl TokenNgram {
                 for (&tok, &count) in &entry.counts {
                     let prob = (count as f32 + alpha) / denom;
                     let base_prob = alpha / denom;
-                    // Logit bias = w * log(prob / base_prob) = w * log(count/alpha + 1)
-                    logits[tok as usize] += w * (prob / base_prob).ln();
+                    logits[tok as usize] += w * self.scale * (prob / base_prob).ln();
                 }
             }
         }
@@ -179,7 +180,7 @@ mod tests {
 
     #[test]
     fn ngram_basic() {
-        let mut ng = TokenNgram::new(2, 10);
+        let mut ng = TokenNgram::new(2, 10, 1.0);
         // Feed sequence: 1, 2, 3, 1, 2
         for &tok in &[1u32, 2, 3, 1, 2] {
             ng.observe(tok);
