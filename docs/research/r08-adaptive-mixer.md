@@ -117,11 +117,15 @@ Not yet saturated — eta=0.10 may not be the peak.
 | eta | BPB (100KB) | vs static (1.3281) | w_ng @ 75% | w_b @ 75% |
 |---|---|---|---|---|
 | **0.005** | **1.3238** | **-0.0043** | 1.793 | 1.092 |
+| 0.002 | 1.3241 | -0.0040 | 1.622 | 1.068 |
+| 0.002 | 1.3241 | -0.0040 | 1.622 | 1.068 |
+| **0.005** | **1.3238** | **-0.0043** | 1.793 | 1.092 |
 | **0.01** | **1.3238** | **-0.0043** | 1.852 | 1.110 |
 | 0.10 | 1.3278 | -0.0003 | 2.061 | 1.398 |
 
-**Plateau at eta <= 0.01**: BPB converges to 1.3238 regardless of eta.
-The mixer's true ceiling on 100KB is -0.0043 below static.
+**Optimal eta = 0.005-0.01 on 100KB.** Below 0.005, adaptation is too slow
+(eta=0.002: +0.0003 worse). Above 0.01, weights overshoot (eta=0.10: +0.0040).
+True ceiling: **1.3238 BPB (-0.0043 vs static)**.
 
 **eta=0.01 is the clear winner on 100KB: 1.3238 BPB (-0.0043 vs static).**
 
