@@ -174,8 +174,11 @@ surprise lr (R07).
 
 | eta | BPB (100KB) | vs static (1.3281) |
 |---|---|---|
+| 0.005 | **1.3238** | **-0.0043** |
 | 0.01 | **1.3238** | **-0.0043** |
 | 0.10 | 1.3278 | -0.0003 |
+
+Plateau at eta <= 0.01: BPB converges to 1.3238. No further eta tuning needed.
 
 **Best: eta=0.01 → 1.3238 BPB (-0.0043 vs static).** Lower eta is better for
 100KB (more stable convergence). Only adaptive mechanism that improves on 100KB.
