@@ -9,7 +9,8 @@
 | Phase 0 — RWKV-7 only | 1.4691 | 0.1B f32+Q8head, 100KB |
 | Phase 0 — ensemble | 1.4086 | RWKV + N-gram(4) + bias head, 100KB |
 | Phase 0 — tuned ensemble | 1.3078 | lr=0.30, scale=0.5, 10KB |
-| Phase 0 — dynamic lr | 1.2997 | surprise-modulated tau=2000, 10KB |
+| Phase 0 — dynamic lr | 1.2997 | surprise-modulated tau=2000, 10KB (KILLED) |
+| Phase 0 — adaptive mixer | 1.2997 | learned weights eta=0.10, 10KB |
 
 100KB "quick" eval. Full enwik8 pending throughput optimization (85 B/s → ~327h).
 
@@ -46,6 +47,8 @@
 | BPB dynamic lr (enwik8 10KB) | 1.2997 | 2026-10-02 |
 | BPB tuned static (enwik8 100KB) | 1.3281 | 2026-10-02 |
 | BPB surprise tau=1000 (enwik8 100KB) | 1.3320 | 2026-10-02 (KILLED) |
+| BPB mixer eta=0.10 (enwik8 10KB) | 1.2997 | 2026-10-02 |
+| BPB mixer eta=0.10 (enwik8 100KB) | pending | 2026-10-02 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
 | bytes/s | 85 | 2026-10-01 |
 | MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
@@ -144,3 +147,23 @@ actual ~4.0). Mechanism amplifies lr above lr0 on enwik8. Needs redesign.
 **KILLED**: Surprise modulation does not scale to 100KB at any tau.
 Static lr=0.30 remains best for 100KB. Next: find optimal static lr for 100KB.
 See `docs/research/r07-dynamic-lr.md` for full analysis.
+
+## Adaptive Component Mixer (R08, 2026-10-02)
+
+Online gradient descent on ensemble component weights:
+`final[i] = rwkv[i] + w_ng * ng[i] + w_b * b[i]`
+
+Eta sweep on 10KB (lr=0.30, scale=0.5):
+
+| eta | BPB (10KB) | vs static (1.3078) |
+|---|---|---|
+| 0.001 | 1.3068 | -0.0010 |
+| 0.005 | 1.3046 | -0.0032 |
+| 0.01 | 1.3032 | -0.0046 |
+| 0.02 | 1.3017 | -0.0061 |
+| 0.05 | 1.3001 | -0.0077 |
+| 0.10 | 1.2997 | -0.0081 |
+
+Best 10KB: **1.2997 BPB** (eta=0.10). Monotonically improving — same pattern as
+surprise lr (R07). 100KB validation pending — critical to confirm scaling.
+See `docs/research/r08-adaptive-mixer.md` for full analysis.
