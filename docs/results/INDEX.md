@@ -206,19 +206,25 @@ See `docs/research/r08-adaptive-mixer.md` for full analysis.
 Exhaustive survey of 8 non-standard number systems for CPU inference.
 40+ web searches, 6 parallel research threads. See `docs/research/r14-alternative-number-systems.md`.
 
-**Winner: Ternary (BitNet b1.58)** — 5-30x speedup, matches FP16 quality (QAT), multiplication-free.
-Requires ternary-trained weights. Post-training ternary as experiment on RWKV 0.1B.
+Initial survey identified ternary (BitNet b1.58) as potential winner.
+Verification phase (5 targeted threads, 40+ additional searches) **killed ternary**:
+PTQ ternary on 0.1B = catastrophic collapse (PPL >4000). QAT requires retraining.
+RWKV SSM recurrence propagates quant noise. No neural compressor uses <Q8.
+
+**Real winner: Block-32 Q8 + AVX-VNNI + buffer reuse** (address actual bottleneck).
 
 | System | Verdict | Reason |
 |---|---|---|
-| Ternary (BitNet b1.58) | **WINNER** | 5-30x CPU speedup, match FP16 quality |
-| BFP sub-row (MX) | Incremental | Our Q8 already is BFP; block=32 modest gain |
+| **Block-32 Q8** | **WINNER** | llama.cpp standard, -0.13 loss vs per-row, ~3% overhead |
+| AVX-VNNI intrinsics | High priority | Untapped hardware capability, est. 1.5-2x matmul |
+| Buffer reuse | High priority | 370 allocs/token pollute cache, 13% bandwidth util |
 | ANS | Adopt for coder | Industry-standard entropy coding |
+| Ternary (BitNet) | **KILLED** | PTQ collapse at 0.1B, can't retrain, +0.30-0.50 BPB |
+| Q4 | **KILLED** | +30% PPL on RWKV-7 0.1B, est. +0.15-0.40 BPB |
 | LNS | Rejected | Accumulation bottleneck kills dot products |
 | RNS | Rejected | Carry-free irrelevant on CPU (1-cycle adds) |
 | Stochastic | Rejected | Precision O(1/sqrt(N)), CPU-impractical |
 | Posit | Rejected | 4-20x slower in software |
-| Balanced ternary | Rejected | Cannot emulate on binary hardware |
 
 ## Roadmap
 

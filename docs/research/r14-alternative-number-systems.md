@@ -237,26 +237,114 @@ Incremental improvement over fixed quantization.
 
 ## Actionable Conclusions
 
-### Tier 1 -- High Impact (requires ternary weights)
-1. **Ternary inference kernel**: Implement Litespark-style int8 SIMD ternary matmul
-   using AVX-VNNI. Weights stored as i8 {-1, 0, +1}. No multiplications -- only
-   masked add/sub. Compatible with our hardware.
-2. **Post-training ternary experiment**: Quantize existing RWKV 0.1B to ternary using
-   PT-BitNet methodology. Measure BPB degradation. If < +0.05 BPB, adopt.
-3. **Monitor ecosystem**: Watch for ternary-trained RWKV-7 models on HuggingFace.
-   BitNet b1.58 2B4T was released April 2025 -- RWKV community may follow.
+### ~~Tier 1 -- High Impact (requires ternary weights)~~ KILLED
 
-### Tier 2 -- Incremental (no retraining needed)
-4. **Sub-row BFP blocking** (MXINT8-style): Change Q8 from per-row scale to
-   per-32-element scale. Better outlier handling, same SIMD path.
-5. **ANS entropy coder**: Implement rANS/tANS for the compression output stage.
-   Industry standard, well-documented, optimal coding efficiency.
+**Ternary is DEAD for azathoth-lm.** Verification phase (5 targeted research threads,
+40+ additional searches) conclusively killed this approach. Evidence:
+
+**Problem 1: Scale — 0.1B is too small for extreme quantization.**
+- PTQ ternary on OPT-125M: PPL >4,000 (GPTQ) — total collapse
+- Best PTQ 2-bit on OPT-125M: PPL 75.43 (OmniQuant) — 2.7x degradation
+- QAT ternary on OPT-125M: PPL 39.92 vs 27.65 FP16 — +44% even with retraining
+- Spectra TriLM 99M: 2.02x worse PPL than float equivalent (trained from scratch)
+- Scaling law (ACL 2025): "degradation decreases with model size" — 0.1B is worst case
+- BitNet b1.58 only validated at 3B+. Smallest Microsoft model: 2B.
+
+**Problem 2: We can't retrain — PTQ is our only option.**
+- All ternary successes (BitNet, Spectra, ParetoQ) require QAT from scratch
+- PTQ ternary = mathematical collapse at any scale below 1B
+- We don't have compute/data to retrain RWKV-7 with ternary constraints
+
+**Problem 3: RWKV/SSMs propagate quantization error through time.**
+- SSM recurrence multiplies quantization noise across sequence length
+- Transformers localize errors; SSMs compound them
+- RWKV-7 0.1B + GPTQ 3.5bpw: PPL 14.21 → 40.16 (2.83x) — RWKVQuant paper
+- Even best method (RWKVQuant 3.275bpw): PPL 18.41 (+30%)
+
+**Problem 4: Compression demands precision that ternary cannot provide.**
+- No neural compressor uses ternary. Nacrith: F32. ts_zip: Q8. NNCP: F32/F16.
+- Nacrith explicitly states F32 is "critical requirement for lossless reconstruction"
+- CDF precision upgrade (2^16 → 2^24) alone worth 0.517 BPB in Nacrith
+- Estimated ternary BPB impact: +0.30 to +0.50 — would push 1.30 → 1.60-1.80
+- Every 0.01 BPB = 1% larger files. Ternary = 30-50% larger files.
+
+**Problem 5: The bottleneck isn't arithmetic — it's memory bandwidth.**
+- Our pipeline is memory-bound: 4.9 GB/s of 38 GB/s theoretical DRAM bandwidth
+- CPU idle ~87% of time waiting for memory, not computing
+- Ternary's multiplication elimination is irrelevant — multiplications aren't the bottleneck
+- Ternary's bandwidth reduction (142 MB → ~35 MB) would give ~3.5x (Amdahl on 95%)
+  BUT quality collapse makes the bandwidth gain worthless
+
+**Q4 also killed for 0.1B compression:**
+- RWKV Q4_0 on 169M: 2.54x PPL blowup (rwkv.cpp issue #12)
+- RWKVQuant Q4 on RWKV-7 0.1B: +30% PPL
+- Estimated BPB impact: +0.15 to +0.40 — unacceptable for compression
+
+**Minimum viable quantization for compression at 0.1B: Q8 (validated).**
+
+Sources: RWKVQuant (ICML 2025), TernaryLLM (arXiv 2024), Spectra (ICLR 2025),
+ParetoQ (Meta 2025), rwkv.cpp #12, Nacrith, Low-Bit Quant Scaling Laws (ACL 2025)
+
+### Tier 1 -- High Impact (validated, no retraining needed)
+
+1. **Block-32 Q8 quantization** (MXINT8-style):
+   Change Q8 from per-row scale (1 scale per 768 elements) to per-32-element scale.
+   - llama.cpp uses block-32 universally across ALL GGUF types — battle-tested
+   - Direct measurement on 145M model: training loss 3.1251 (block-32) vs 3.2560
+     (per-row) — 0.1309 improvement at INT8 (arXiv 2510.25602)
+   - Crest factor reduction: ~12 (per-row) → ~2.96 (block-32) — outliers handled
+   - Speed penalty: ~3% arithmetic overhead (1 fp32 mul per 32 int MACs)
+   - SIMD-aligned: 32 bytes = 256 bits = AVX2 register width
+   - We already have the code pattern: Q4Tensor uses group_size=64
+   - Memory overhead: 48 bytes scales per 768-byte row (6.25%) — negligible
+   - Use f16 scales like llama.cpp to minimize overhead
+
+2. **AVX-VNNI intrinsics (VPDPBUSD)**:
+   Our Q8 matmul auto-vectorizes but doesn't use VNNI explicitly. VNNI fuses
+   4x(u8*i8)+i32 in a single instruction. Our i5-1235U has AVX-VNNI.
+   - Documented in r03 as "Tier 2" but never implemented
+   - Would eliminate i8→i32 widening overhead in inner loop
+   - Expected: 1.5-2x speedup on Q8 matmul
+
+3. **Buffer reuse / arena allocator**:
+   ~370 Vec allocations per token per layer pollute L1/L2 cache.
+   Pre-allocate scratch workspace and reuse across forward passes.
+   - Effective DRAM bandwidth: 4.9 GB/s of 38 GB/s (13%) — cache pollution is a cause
+   - Expected: significant bandwidth utilization improvement
+
+### Tier 2 -- Incremental
+
+4. **ANS entropy coder**: Implement rANS/tANS for the compression output stage.
+   Industry standard (Zstandard, LZFSE, Brotli). Optimal coding efficiency.
+
+5. **Head projection optimization**: The 65536x768 head matrix = 35% of total time.
+   Confidence-based skip (already partially implemented via --skip) saves this
+   entirely for high-confidence tokens.
 
 ### Tier 3 -- Exploratory
+
 6. **Log-domain weight storage**: Store weights as log2 values, dequantize to int8
    at load time. May improve precision for long-tailed distributions.
-7. **Mitchell's trick for scalar ops**: Use `f32::to_bits()` integer add for
-   non-critical-path multiplications (mixer weights, bias updates).
+
+## Bottleneck Analysis Summary
+
+```
+Per-token breakdown (~29 ms/token at Q8, 117 B/s):
+
+  Head projection (65536x768 Q8)     ~10 ms  (35%)  ← skip saves this
+  FFN projections (3072x768 x2 x12)  ~12 ms  (40%)  ← block-32 helps
+  Attn projections (768x768 x4 x12)   ~6 ms  (20%)  ← block-32 helps
+  LoRA, norms, state, element-wise     ~1 ms   (5%)
+
+  Weight bytes read per token: ~142 MB (Q8)
+  Effective DRAM bandwidth: 4.9 GB/s (13% of 38 GB/s theoretical)
+  Root cause: cache pollution from ~370 allocations + non-sequential access
+```
+
+Amdahl's law for matmul optimization:
+- Block-32 + VNNI (est. 1.5-2x matmul speedup): overall 1.4-1.9x
+- With buffer reuse (est. 2x bandwidth utilization): overall 2-3x combined
+- With head skip at 50% confidence: additional ~17% time saved
 
 ## Key Sources (selected)
 
@@ -275,3 +363,16 @@ Incremental improvement over fixed quantization.
 - SemiAnalysis Number Formats: https://semianalysis.com/2024/01/11/neural-network-quantization-and-number/
 - uops.info Alder Lake: https://uops.info
 - ANS (Duda): https://arxiv.org/abs/0902.0271
+- RWKVQuant (ICML 2025): https://arxiv.org/abs/2505.03803
+- rwkv-quant benchmarks: https://github.com/RafaelUI/rwkv-quant
+- TernaryLLM: https://arxiv.org/html/2406.07177v1
+- TernaryLM: https://arxiv.org/html/2602.07374v2
+- Spectra TriLM (ICLR 2025): https://arxiv.org/abs/2407.12327
+- ParetoQ (Meta): https://pytorch.org/blog/paretoq-scaling-laws-in-extremely-low-bit-llm-quantization/
+- Low-Bit Quant Scaling Laws (ACL 2025): https://arxiv.org/pdf/2411.17691
+- Nacrith: https://arxiv.org/html/2602.19626v1
+- rwkv.cpp Q4 issue: https://github.com/RWKV/rwkv.cpp/issues/12
+- llama.cpp GGUF encoding: https://github.com/ggml-org/llama.cpp/wiki/Tensor-Encoding-Schemes
+- INT vs FP fine-grained quant: https://arxiv.org/html/2510.25602v1
+- Ternary Mamba: https://arxiv.org/html/2606.18114v1
+- Slender-Mamba (COLING 2025): https://aclanthology.org/2025.coling-main.316/
