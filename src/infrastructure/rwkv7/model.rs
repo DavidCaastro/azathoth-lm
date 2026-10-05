@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::domain::tensor::*;
-use crate::domain::quant::{QuantMatrix, QuantLevel, select_best};
+use crate::domain::quant::{QuantMatrix, QuantPolicy, quantize_matrix};
 use crate::infrastructure::rwkv7::safetensors::SafeTensorsFile;
 
 pub struct Rwkv7Config {
@@ -114,7 +114,7 @@ pub struct Rwkv7Model {
     layers: Vec<LayerWeights>,
     ln_out_w: Tensor,      // (D,)
     ln_out_b: Tensor,      // (D,)
-    head_w: Q8Tensor,      // (V, D) — Q8 quantized (biggest matrix)
+    head_w: QuantMatrix,    // (V, D) — auto-quantized (biggest matrix)
 }
 
 /// Recurrent state for inference.
@@ -190,54 +190,64 @@ impl Rwkv7Model {
             ln_out_b = st.load_tensor("ln_out.bias");
         }
 
-        // Benchmark all quantization levels on head matrix, pick best
+        // Determine quantization policy via empirical benchmark on head matrix
         eprintln!("[rwkv7] benchmarking quantization levels ...");
-        let (layer_level, bench_results) = select_best(&head_w_f32);
+        let (policy, bench_results) = QuantPolicy::auto_detect(&head_w_f32);
         for r in &bench_results {
             eprintln!("[rwkv7]   {}", r);
         }
-        eprintln!("[rwkv7] selected: {}", layer_level.name());
+        let policy_name = match &policy {
+            QuantPolicy::Uniform(l) => format!("Uniform({})", l.name()),
+            QuantPolicy::PerMatrix => "PerMatrix".to_string(),
+        };
+        eprintln!("[rwkv7] policy: {}", policy_name);
 
-        // Head always Q8 (proven optimal for V×D)
-        let head_w = Q8Tensor::from_f32(&head_w_f32);
+        // Head goes through the same policy
+        let (head_w, head_level) = quantize_matrix(&head_w_f32, &policy);
+        eprintln!("[rwkv7] head: {} ({:.1} MB)",
+                  head_level.name(), head_w.mem_bytes() as f64 / 1_048_576.0);
 
         let mut layers = Vec::with_capacity(config.n_layer);
         for i in 0..config.n_layer {
-            eprintln!("[rwkv7]   layer {} ({}) ...", i, layer_level.name());
             let layer = if hf_format {
-                load_layer_hf(&st, i, layer_level)
+                load_layer_hf(&st, i, &policy)
             } else {
-                load_layer_blink(&st, i, layer_level)
+                load_layer_blink(&st, i, &policy)
             };
+            eprintln!("[rwkv7]   layer {} loaded", i);
             layers.push(layer);
         }
 
-        let head_q8_mb = head_w.mem_bytes() as f64 / 1_048_576.0;
-        let head_f32_mb = (v * d * 4) as f64 / 1_048_576.0;
-
-        // Compute total quantized memory for layers
-        let mut layer_q_bytes: usize = 0;
-        let mut layer_f32_equiv: usize = 0;
+        // Report quantization summary
+        let mut q_bytes: usize = head_w.mem_bytes();
+        let mut f32_equiv: usize = v * d * 4;
+        let mut level_counts = std::collections::HashMap::new();
+        *level_counts.entry(head_level.name()).or_insert(0usize) += 1;
         for lw in &layers {
             let tm = &lw.time_mix;
             for q in [&tm.key_w, &tm.value_w, &tm.receptance_w, &tm.output_w] {
-                layer_q_bytes += q.mem_bytes();
+                q_bytes += q.mem_bytes();
                 let (r, c) = q.shape();
-                layer_f32_equiv += r * c * 4;
+                f32_equiv += r * c * 4;
+                *level_counts.entry(q.level().name()).or_insert(0) += 1;
             }
             let cm = &lw.channel_mix;
             for q in [&cm.key_w, &cm.value_w] {
-                layer_q_bytes += q.mem_bytes();
+                q_bytes += q.mem_bytes();
                 let (r, c) = q.shape();
-                layer_f32_equiv += r * c * 4;
+                f32_equiv += r * c * 4;
+                *level_counts.entry(q.level().name()).or_insert(0) += 1;
             }
         }
-        let layer_q_mb = layer_q_bytes as f64 / 1_048_576.0;
-        let layer_f32_mb = layer_f32_equiv as f64 / 1_048_576.0;
-        let total_saved = (head_f32_mb - head_q8_mb) + (layer_f32_mb - layer_q_mb);
-
-        eprintln!("[rwkv7] head Q8: {:.1} MB, layers {}: {:.1} MB (saved {:.1} MB from f32)",
-                  head_q8_mb, layer_level.name(), layer_q_mb, total_saved);
+        let q_mb = q_bytes as f64 / 1_048_576.0;
+        let f32_mb = f32_equiv as f64 / 1_048_576.0;
+        let saved = f32_mb - q_mb;
+        let mut summary_parts: Vec<String> = level_counts.iter()
+            .map(|(name, count)| format!("{}×{}", count, name))
+            .collect();
+        summary_parts.sort();
+        eprintln!("[rwkv7] quantization: {} — {:.1} MB (saved {:.1} MB from {:.1} MB f32)",
+                  summary_parts.join(", "), q_mb, saved, f32_mb);
         eprintln!("[rwkv7] loaded {} layers, D={}, H={}, N={}, V={}",
                   config.n_layer, d, config.n_head, config.head_size, v);
 
@@ -282,9 +292,9 @@ impl Rwkv7Model {
 
         }
 
-        // Final LayerNorm + head projection (Q8)
+        // Final LayerNorm + head projection (auto-quantized)
         x = layer_norm(&x, &self.ln_out_w, &self.ln_out_b, 1e-5);
-        q8_mat_vec_mul(&self.head_w, &x)
+        self.head_w.mat_vec_mul(&x)
     }
 }
 
@@ -431,7 +441,7 @@ fn channel_mixing(x: &Tensor, x_prev: &Tensor, w: &ChannelMixWeights) -> Tensor 
 
 // ---- Weight loading helpers ----
 
-fn load_layer_hf(st: &SafeTensorsFile, i: usize, ql: QuantLevel) -> LayerWeights {
+fn load_layer_hf(st: &SafeTensorsFile, i: usize, policy: &QuantPolicy) -> LayerWeights {
     // HF key mapping (RWKV/RWKV7-Goose-*-HF SafeTensors format):
     //   attn_norm → ln1, ffn_norm → ln2
     //   attn.x_r [1,1,D] → squeeze to [D]
@@ -483,22 +493,22 @@ fn load_layer_hf(st: &SafeTensorsFile, i: usize, ql: QuantLevel) -> LayerWeights
             k_k: st.load_tensor(&format!("{}.k_k", att)),
             k_a: st.load_tensor(&format!("{}.k_a", att)),
             r_k: flatten_tensor(st.load_tensor(&format!("{}.r_k", att))),
-            key_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.k_proj.weight", att)), ql),
-            value_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.v_proj.weight", att)), ql),
-            receptance_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.r_proj.weight", att)), ql),
-            output_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.o_proj.weight", att)), ql),
+            key_w: quantize_matrix(&st.load_tensor(&format!("{}.k_proj.weight", att)), policy).0,
+            value_w: quantize_matrix(&st.load_tensor(&format!("{}.v_proj.weight", att)), policy).0,
+            receptance_w: quantize_matrix(&st.load_tensor(&format!("{}.r_proj.weight", att)), policy).0,
+            output_w: quantize_matrix(&st.load_tensor(&format!("{}.o_proj.weight", att)), policy).0,
             ln_x_w: st.load_tensor(&format!("{}.g_norm.weight", att)),
             ln_x_b: st.load_tensor(&format!("{}.g_norm.bias", att)),
         },
         channel_mix: ChannelMixWeights {
             x_k: st.load_tensor(&format!("{}.ffn.x_k", blk)),
-            key_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.ffn.key.weight", blk)), ql),
-            value_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.ffn.value.weight", blk)), ql),
+            key_w: quantize_matrix(&st.load_tensor(&format!("{}.ffn.key.weight", blk)), policy).0,
+            value_w: quantize_matrix(&st.load_tensor(&format!("{}.ffn.value.weight", blk)), policy).0,
         },
     }
 }
 
-fn load_layer_blink(st: &SafeTensorsFile, i: usize, ql: QuantLevel) -> LayerWeights {
+fn load_layer_blink(st: &SafeTensorsFile, i: usize, policy: &QuantPolicy) -> LayerWeights {
     let att = format!("blocks.{}.att", i);
     let ffn = format!("blocks.{}.ffn", i);
     let blk = format!("blocks.{}", i);
@@ -546,17 +556,17 @@ fn load_layer_blink(st: &SafeTensorsFile, i: usize, ql: QuantLevel) -> LayerWeig
             k_k: squeeze(st.load_tensor(&format!("{}.k_k", att))),
             k_a: squeeze(st.load_tensor(&format!("{}.k_a", att))),
             r_k: flatten_tensor(st.load_tensor(&format!("{}.r_k", att))),
-            key_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.key.weight", att)), ql),
-            value_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.value.weight", att)), ql),
-            receptance_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.receptance.weight", att)), ql),
-            output_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.output.weight", att)), ql),
+            key_w: quantize_matrix(&st.load_tensor(&format!("{}.key.weight", att)), policy).0,
+            value_w: quantize_matrix(&st.load_tensor(&format!("{}.value.weight", att)), policy).0,
+            receptance_w: quantize_matrix(&st.load_tensor(&format!("{}.receptance.weight", att)), policy).0,
+            output_w: quantize_matrix(&st.load_tensor(&format!("{}.output.weight", att)), policy).0,
             ln_x_w: st.load_tensor(&format!("{}.ln_x.weight", att)),
             ln_x_b: st.load_tensor(&format!("{}.ln_x.bias", att)),
         },
         channel_mix: ChannelMixWeights {
             x_k: squeeze(st.load_tensor(&format!("{}.x_k", ffn))),
-            key_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.key.weight", ffn)), ql),
-            value_w: QuantMatrix::from_f32(&st.load_tensor(&format!("{}.value.weight", ffn)), ql),
+            key_w: quantize_matrix(&st.load_tensor(&format!("{}.key.weight", ffn)), policy).0,
+            value_w: quantize_matrix(&st.load_tensor(&format!("{}.value.weight", ffn)), policy).0,
         },
     }
 }

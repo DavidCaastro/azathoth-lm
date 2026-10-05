@@ -5,10 +5,18 @@
 //! quantization levels on the actual data and picks the best balance of
 //! quality, speed, and memory.
 //!
+//! Supports two quantization policies:
+//! - `Uniform(level)`: same level for all matrices (fast, good for small models)
+//! - `PerMatrix`: each matrix independently benchmarked and auto-selected
+//!
 //! Usage:
-//!   let level = select_best(&sample_matrix);
-//!   let qm = QuantMatrix::from_f32(&tensor, level);
-//!   let result = qm.mat_vec_mul(&input_vec);
+//!   // Uniform: benchmark once, apply everywhere
+//!   let (policy, results) = QuantPolicy::auto_detect(&sample_matrix);
+//!   let qm = quantize_matrix(&tensor, &policy);
+//!
+//!   // Per-matrix: each matrix finds its own optimal level
+//!   let policy = QuantPolicy::PerMatrix;
+//!   let qm = quantize_matrix(&tensor, &policy);
 
 use crate::domain::tensor::*;
 
@@ -79,6 +87,49 @@ impl QuantMatrix {
             QuantMatrix::F32(t) => (t.shape[0], t.shape[1]),
             QuantMatrix::Q8(t) => (t.rows, t.cols),
             QuantMatrix::Q4(t) => (t.rows, t.cols),
+        }
+    }
+
+    /// Which quantization level this matrix uses.
+    pub fn level(&self) -> QuantLevel {
+        match self {
+            QuantMatrix::F32(_) => QuantLevel::F32,
+            QuantMatrix::Q8(_) => QuantLevel::Q8,
+            QuantMatrix::Q4(t) => QuantLevel::Q4 { group_size: t.group_size },
+        }
+    }
+}
+
+/// Quantization policy — determines how matrices select their precision.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub enum QuantPolicy {
+    /// Same quantization level for all matrices (fast load, good for small models).
+    Uniform(QuantLevel),
+    /// Each matrix independently benchmarks all levels and picks its optimal one.
+    /// Adds load-time overhead (~1s per 72 matrices) but finds per-matrix optima.
+    PerMatrix,
+}
+
+impl QuantPolicy {
+    /// Auto-detect the best uniform policy by benchmarking a sample matrix.
+    /// Returns the policy and benchmark results for reporting.
+    pub fn auto_detect(sample_matrix: &Tensor) -> (Self, Vec<BenchResult>) {
+        let (level, results) = select_best(sample_matrix);
+        (QuantPolicy::Uniform(level), results)
+    }
+}
+
+/// Quantize a matrix according to the given policy.
+/// Returns the quantized matrix and the level that was selected.
+pub fn quantize_matrix(tensor: &Tensor, policy: &QuantPolicy) -> (QuantMatrix, QuantLevel) {
+    match policy {
+        QuantPolicy::Uniform(level) => {
+            (QuantMatrix::from_f32(tensor, *level), *level)
+        }
+        QuantPolicy::PerMatrix => {
+            let (level, _) = select_best(tensor);
+            (QuantMatrix::from_f32(tensor, level), level)
         }
     }
 }

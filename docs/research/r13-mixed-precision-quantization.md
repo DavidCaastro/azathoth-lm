@@ -133,23 +133,37 @@ benchmark, but at higher load-time cost.
    isolation, run a few hundred tokens through the model and measure end-to-end
    perplexity impact per matrix. This captures inter-layer dependencies.
 
-### Implementation Note for Future Per-Matrix
+### Implementation: QuantPolicy (DONE)
 
-When we implement per-matrix selection, the change is minimal:
+Implemented a modular `QuantPolicy` system that makes switching trivial:
+
 ```rust
-// Current: one level for all
-let (level, _) = select_best(&head_matrix);
+// quant.rs
+pub enum QuantPolicy {
+    Uniform(QuantLevel),  // same level for all matrices (current default)
+    PerMatrix,            // each matrix benchmarked independently
+}
 
-// Future: per-matrix
-let key_level = select_best(&key_matrix).0;
-let value_level = select_best(&value_matrix).0;
-let ffn_key_level = select_best(&ffn_key_matrix).0;
-// ... etc
+// Auto-detect: benchmarks sample matrix, returns Uniform policy
+let (policy, results) = QuantPolicy::auto_detect(&head_matrix);
+
+// Quantize any matrix through the policy
+let (qm, level) = quantize_matrix(&tensor, &policy);
+
+// To switch to per-matrix (future): just change the policy
+let policy = QuantPolicy::PerMatrix;
+// All load functions already accept &QuantPolicy — zero code changes needed
 ```
 
-The `QuantMatrix` enum already supports this — each matrix independently stores its
-own quantization type. The only change is calling `select_best` per matrix instead
-of once globally.
+Key changes:
+- `QuantPolicy` enum in `quant.rs` with `Uniform` and `PerMatrix` variants
+- `quantize_matrix(tensor, policy)` dispatches to either fixed level or per-matrix benchmark
+- `QuantMatrix::level()` method to inspect what level a matrix uses (for reporting)
+- `load_layer_hf/blink` accept `&QuantPolicy` instead of `QuantLevel`
+- Head matrix now `QuantMatrix` (was hardcoded `Q8Tensor`) — goes through same policy
+- Reporting summary: `73×Q8 — 129.6 MB (saved 386.4 MB from 516.0 MB f32)`
+
+Smoke test: BPB 1.2797 on 10KB — identical to previous, zero regression.
 
 ## Lessons
 
