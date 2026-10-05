@@ -212,13 +212,14 @@ PTQ ternary on 0.1B = catastrophic collapse (PPL >4000). QAT requires retraining
 RWKV SSM recurrence propagates quant noise. No neural compressor uses <Q8.
 
 Block-32 Q8 tested and KILLED (+0.0378 BPB, -34% speed on RWKV).
-**Real path: AVX-VNNI + buffer reuse + per-row Q8** (address actual bottleneck).
+AVX-VNNI implemented and KILLED (-33% speed, pipeline is memory-bound not compute-bound).
+**Real path: buffer reuse / arena allocator + per-row Q8** (address actual bottleneck).
 
 | System | Verdict | Reason |
 |---|---|---|
 | Block-32 Q8 | **KILLED** | +0.0378 BPB, -34% speed on RWKV (uniform weights) |
-| AVX-VNNI intrinsics | High priority | Untapped hardware capability, est. 1.5-2x matmul |
-| Buffer reuse | High priority | 370 allocs/token pollute cache, 13% bandwidth util |
+| AVX-VNNI intrinsics | **KILLED** | -33% speed; memory-bound, not compute-bound |
+| Buffer reuse | **High priority** | 370 allocs/token pollute cache, 13% bandwidth util |
 | ANS | Adopt for coder | Industry-standard entropy coding |
 | Ternary (BitNet) | **KILLED** | PTQ collapse at 0.1B, can't retrain, +0.30-0.50 BPB |
 | Q4 | **KILLED** | +30% PPL on RWKV-7 0.1B, est. +0.15-0.40 BPB |

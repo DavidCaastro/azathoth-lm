@@ -1,3 +1,6 @@
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
 /// Dense tensor backed by a contiguous f32 buffer.
 /// Shapes are row-major: a (R, C) matrix stores R*C floats,
 /// row 0 first, then row 1, etc.
@@ -140,31 +143,35 @@ impl Q8Tensor {
 }
 
 /// y = Q8_mat @ f32_vec using integer accumulation.
-/// Quantizes the input vector to i8 once, then does i8*i8 → i32 dot products.
-/// Each row: out[r] = row_scale[r] * vec_scale * sum(q_row[c] * q_vec[c])
+/// Dispatches to AVX-VNNI kernel if available, otherwise scalar fallback.
 pub fn q8_mat_vec_mul(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
+    // VNNI kernel disabled: benchmarks show scalar auto-vectorized path is faster
+    // on our memory-bound workload (79 B/s VNNI vs 117 B/s scalar on i5-1235U).
+    // The CPU is idle ~87% waiting for DRAM; faster arithmetic doesn't help.
+    // Keeping VNNI code for future use when memory bandwidth improves (buffer reuse).
+    #[cfg(target_arch = "x86_64")]
+    {
+        if false && is_x86_feature_detected!("avxvnni") {
+            return unsafe { q8_mat_vec_mul_vnni(mat, vec) };
+        }
+    }
+    q8_mat_vec_mul_scalar(mat, vec)
+}
+
+/// Scalar fallback: i8*i8 → i32 with 4-row ILP.
+fn q8_mat_vec_mul_scalar(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
     assert_eq!(vec.shape.len(), 1);
     let rows = mat.rows;
     let cols = mat.cols;
     assert_eq!(vec.shape[0], cols);
 
     let v = &vec.as_slice()[..cols];
-
-    // Quantize input vector to i8 (amortized over all rows)
-    let mut v_abs_max = 0.0f32;
-    for &x in v { let a = x.abs(); if a > v_abs_max { v_abs_max = a; } }
-    let v_scale = if v_abs_max > 0.0 { v_abs_max / 127.0 } else { 1.0 };
-    let v_inv = 1.0 / v_scale;
-    let mut v_q = vec![0i8; cols];
-    for c in 0..cols {
-        v_q[c] = (v[c] * v_inv).round().clamp(-127.0, 127.0) as i8;
-    }
+    let (v_q, v_scale) = quantize_vec_i8(v);
 
     let mut out = vec![0.0f32; rows];
     let q = &mat.q_data;
     let scales = &mat.scales;
 
-    // Integer dot product: i8 * i8 → i32 accumulation (SIMD-friendly)
     let rows_4 = rows / 4 * 4;
     for r in (0..rows_4).step_by(4) {
         let q0 = &q[r * cols..(r + 1) * cols];
@@ -192,6 +199,116 @@ pub fn q8_mat_vec_mul(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
         }
         out[r] = sum as f32 * (scales[r] * v_scale);
     }
+    Tensor::from_data(out, vec![rows])
+}
+
+/// Quantize f32 vector to i8 with single global scale. Returns (quantized, scale).
+fn quantize_vec_i8(v: &[f32]) -> (Vec<i8>, f32) {
+    let mut abs_max = 0.0f32;
+    for &x in v { let a = x.abs(); if a > abs_max { abs_max = a; } }
+    let scale = if abs_max > 0.0 { abs_max / 127.0 } else { 1.0 };
+    let inv = 1.0 / scale;
+    let mut q = vec![0i8; v.len()];
+    for i in 0..v.len() {
+        q[i] = (v[i] * inv).round().clamp(-127.0, 127.0) as i8;
+    }
+    (q, scale)
+}
+
+// ---- AVX-VNNI kernel ----
+
+/// Horizontal sum of 8 x i32 lanes in __m256i.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn hsum_i32_avx2(v: __m256i) -> i32 {
+    let hi = _mm256_extracti128_si256::<1>(v);
+    let lo = _mm256_castsi256_si128(v);
+    let sum4 = _mm_add_epi32(lo, hi);
+    let hi64 = _mm_unpackhi_epi64(sum4, sum4);
+    let sum2 = _mm_add_epi32(sum4, hi64);
+    let hi32 = _mm_shuffle_epi32::<0x01>(sum2);
+    _mm_cvtsi128_si32(_mm_add_epi32(sum2, hi32))
+}
+
+/// AVX-VNNI kernel: VPDPBUSD fuses 4x(u8*i8)+i32 per lane.
+/// Uses XOR 0x80 trick to convert i8 weights to u8, with correction term.
+/// 4-row ILP for latency hiding.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avxvnni")]
+unsafe fn q8_mat_vec_mul_vnni(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
+    assert_eq!(vec.shape.len(), 1);
+    let rows = mat.rows;
+    let cols = mat.cols;
+    assert_eq!(vec.shape[0], cols);
+    assert_eq!(cols % 32, 0, "VNNI requires cols divisible by 32");
+
+    let v = &vec.as_slice()[..cols];
+    let (v_q, v_scale) = quantize_vec_i8(v);
+
+    // Precompute correction: 128 * sum(v_q) — accounts for i8→u8 bias on weights
+    let sum_v: i32 = v_q.iter().map(|&x| x as i32).sum();
+    let correction = 128i32 * sum_v;
+
+    let bias = _mm256_set1_epi8(-128i8); // 0x80 for XOR trick
+    let chunks = cols / 32;
+
+    let mut out = vec![0.0f32; rows];
+    let q = mat.q_data.as_ptr();
+    let v_ptr = v_q.as_ptr();
+    let scales = &mat.scales;
+
+    // 4-row ILP
+    let rows_4 = rows / 4 * 4;
+    for r in (0..rows_4).step_by(4) {
+        let mut acc0 = _mm256_setzero_si256();
+        let mut acc1 = _mm256_setzero_si256();
+        let mut acc2 = _mm256_setzero_si256();
+        let mut acc3 = _mm256_setzero_si256();
+
+        let base0 = r * cols;
+        let base1 = base0 + cols;
+        let base2 = base1 + cols;
+        let base3 = base2 + cols;
+
+        for ch in 0..chunks {
+            let off = ch * 32;
+            let vb = _mm256_loadu_si256(v_ptr.add(off) as *const __m256i);
+
+            let w0 = _mm256_loadu_si256(q.add(base0 + off) as *const __m256i);
+            let w1 = _mm256_loadu_si256(q.add(base1 + off) as *const __m256i);
+            let w2 = _mm256_loadu_si256(q.add(base2 + off) as *const __m256i);
+            let w3 = _mm256_loadu_si256(q.add(base3 + off) as *const __m256i);
+
+            acc0 = _mm256_dpbusd_avx_epi32(acc0, _mm256_xor_si256(w0, bias), vb);
+            acc1 = _mm256_dpbusd_avx_epi32(acc1, _mm256_xor_si256(w1, bias), vb);
+            acc2 = _mm256_dpbusd_avx_epi32(acc2, _mm256_xor_si256(w2, bias), vb);
+            acc3 = _mm256_dpbusd_avx_epi32(acc3, _mm256_xor_si256(w3, bias), vb);
+        }
+
+        let d0 = hsum_i32_avx2(acc0) - correction;
+        let d1 = hsum_i32_avx2(acc1) - correction;
+        let d2 = hsum_i32_avx2(acc2) - correction;
+        let d3 = hsum_i32_avx2(acc3) - correction;
+
+        out[r]     = d0 as f32 * (scales[r]     * v_scale);
+        out[r + 1] = d1 as f32 * (scales[r + 1] * v_scale);
+        out[r + 2] = d2 as f32 * (scales[r + 2] * v_scale);
+        out[r + 3] = d3 as f32 * (scales[r + 3] * v_scale);
+    }
+    // Remainder rows
+    for r in rows_4..rows {
+        let mut acc = _mm256_setzero_si256();
+        let base = r * cols;
+        for ch in 0..chunks {
+            let off = ch * 32;
+            let vb = _mm256_loadu_si256(v_ptr.add(off) as *const __m256i);
+            let w = _mm256_loadu_si256(q.add(base + off) as *const __m256i);
+            acc = _mm256_dpbusd_avx_epi32(acc, _mm256_xor_si256(w, bias), vb);
+        }
+        let d = hsum_i32_avx2(acc) - correction;
+        out[r] = d as f32 * (scales[r] * v_scale);
+    }
+
     Tensor::from_data(out, vec![rows])
 }
 
