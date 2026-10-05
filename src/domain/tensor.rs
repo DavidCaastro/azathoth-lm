@@ -440,54 +440,6 @@ pub fn q4_mat_vec_mul(mat: &Q4Tensor, vec: &Tensor) -> Tensor {
     Tensor::from_data(out, vec![rows])
 }
 
-/// Element-wise multiply: a * b (same shape)
-pub fn mul(a: &Tensor, b: &Tensor) -> Tensor {
-    assert_eq!(a.numel(), b.numel());
-    let data: Vec<f32> = a.data.iter().zip(b.data.iter()).map(|(x, y)| x * y).collect();
-    Tensor::from_data(data, a.shape.clone())
-}
-
-/// Element-wise add: a + b
-pub fn add(a: &Tensor, b: &Tensor) -> Tensor {
-    assert_eq!(a.numel(), b.numel());
-    let data: Vec<f32> = a.data.iter().zip(b.data.iter()).map(|(x, y)| x + y).collect();
-    Tensor::from_data(data, a.shape.clone())
-}
-
-/// Element-wise subtract: a - b
-pub fn sub(a: &Tensor, b: &Tensor) -> Tensor {
-    assert_eq!(a.numel(), b.numel());
-    let data: Vec<f32> = a.data.iter().zip(b.data.iter()).map(|(x, y)| x - y).collect();
-    Tensor::from_data(data, a.shape.clone())
-}
-
-/// a + b * scale (fused multiply-add, element-wise)
-pub fn add_scaled(a: &Tensor, b: &Tensor, scale: &Tensor) -> Tensor {
-    assert_eq!(a.numel(), b.numel());
-    assert_eq!(a.numel(), scale.numel());
-    let data: Vec<f32> = a.data.iter()
-        .zip(b.data.iter())
-        .zip(scale.data.iter())
-        .map(|((a, b), s)| a + b * s)
-        .collect();
-    Tensor::from_data(data, a.shape.clone())
-}
-
-pub fn sigmoid(x: &Tensor) -> Tensor {
-    let data: Vec<f32> = x.data.iter().map(|&v| 1.0 / (1.0 + (-v).exp())).collect();
-    Tensor::from_data(data, x.shape.clone())
-}
-
-pub fn tanh_t(x: &Tensor) -> Tensor {
-    let data: Vec<f32> = x.data.iter().map(|&v| v.tanh()).collect();
-    Tensor::from_data(data, x.shape.clone())
-}
-
-/// Squared ReLU: relu(x)^2
-pub fn squared_relu(x: &Tensor) -> Tensor {
-    let data: Vec<f32> = x.data.iter().map(|&v| { let r = v.max(0.0); r * r }).collect();
-    Tensor::from_data(data, x.shape.clone())
-}
 
 /// LayerNorm: (x - mean) / sqrt(var + eps) * weight + bias
 pub fn layer_norm(x: &Tensor, weight: &Tensor, bias: &Tensor, eps: f32) -> Tensor {
@@ -503,58 +455,161 @@ pub fn layer_norm(x: &Tensor, weight: &Tensor, bias: &Tensor, eps: f32) -> Tenso
     Tensor::from_data(data, x.shape.clone())
 }
 
-/// GroupNorm with num_groups groups. x is (num_groups * group_size,)
-pub fn group_norm(x: &Tensor, num_groups: usize, weight: &Tensor, bias: &Tensor, eps: f32) -> Tensor {
-    let n = x.numel();
-    let group_size = n / num_groups;
-    assert_eq!(n, num_groups * group_size);
-    let mut data = vec![0.0f32; n];
-    for g in 0..num_groups {
-        let start = g * group_size;
-        let end = start + group_size;
-        let slice = &x.data[start..end];
-        let mean: f32 = slice.iter().sum::<f32>() / group_size as f32;
-        let var: f32 = slice.iter().map(|&v| (v - mean) * (v - mean)).sum::<f32>() / group_size as f32;
-        let inv_std = 1.0 / (var + eps).sqrt();
-        for i in start..end {
-            data[i] = (x.data[i] - mean) * inv_std * weight.data[i] + bias.data[i];
-        }
-    }
-    Tensor::from_data(data, x.shape.clone())
+
+// ---- Zero-allocation buffer-reuse variants ----
+// These write into pre-existing &mut [f32] buffers instead of allocating.
+// Used by Scratch-based forward pass to eliminate ~1400 allocs/token.
+
+pub fn sub_into(out: &mut [f32], a: &[f32], b: &[f32]) {
+    for (o, (&a, &b)) in out.iter_mut().zip(a.iter().zip(b.iter())) { *o = a - b; }
 }
 
-/// L2 normalize per head: x is (H, N), normalize each row
-pub fn l2_normalize_per_head(x: &Tensor, num_heads: usize, head_size: usize) -> Tensor {
-    assert_eq!(x.numel(), num_heads * head_size);
-    let mut data = x.data.clone();
+pub fn add_inplace(a: &mut [f32], b: &[f32]) {
+    for (a, &b) in a.iter_mut().zip(b.iter()) { *a += b; }
+}
+
+pub fn add_scaled_into(out: &mut [f32], a: &[f32], b: &[f32], scale: &[f32]) {
+    for (((o, &a), &b), &s) in out.iter_mut().zip(a.iter()).zip(b.iter()).zip(scale.iter()) {
+        *o = a + b * s;
+    }
+}
+
+pub fn mul_into(out: &mut [f32], a: &[f32], b: &[f32]) {
+    for (o, (&a, &b)) in out.iter_mut().zip(a.iter().zip(b.iter())) { *o = a * b; }
+}
+
+pub fn tanh_inplace(x: &mut [f32]) {
+    for v in x.iter_mut() { *v = v.tanh(); }
+}
+
+pub fn sigmoid_inplace(x: &mut [f32]) {
+    for v in x.iter_mut() { *v = 1.0 / (1.0 + (-*v).exp()); }
+}
+
+pub fn squared_relu_into(out: &mut [f32], x: &[f32]) {
+    for (o, &x) in out.iter_mut().zip(x.iter()) { let r = x.max(0.0); *o = r * r; }
+}
+
+pub fn layer_norm_into(out: &mut [f32], x: &[f32], weight: &[f32], bias: &[f32], eps: f32) {
+    let n = x.len();
+    let mean: f32 = x.iter().sum::<f32>() / n as f32;
+    let var: f32 = x.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n as f32;
+    let inv_std = 1.0 / (var + eps).sqrt();
+    for i in 0..n {
+        out[i] = (x[i] - mean) * inv_std * weight[i] + bias[i];
+    }
+}
+
+pub fn group_norm_into(out: &mut [f32], x: &[f32], num_groups: usize, weight: &[f32], bias: &[f32], eps: f32) {
+    let n = x.len();
+    let gs = n / num_groups;
+    for g in 0..num_groups {
+        let start = g * gs;
+        let end = start + gs;
+        let slice = &x[start..end];
+        let mean: f32 = slice.iter().sum::<f32>() / gs as f32;
+        let var: f32 = slice.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / gs as f32;
+        let inv_std = 1.0 / (var + eps).sqrt();
+        for i in start..end {
+            out[i] = (x[i] - mean) * inv_std * weight[i] + bias[i];
+        }
+    }
+}
+
+pub fn l2_normalize_per_head_inplace(x: &mut [f32], num_heads: usize, head_size: usize) {
     for h in 0..num_heads {
         let start = h * head_size;
         let end = start + head_size;
-        let norm: f32 = data[start..end].iter().map(|&v| v * v).sum::<f32>().sqrt();
-        let inv_norm = if norm > 1e-12 { 1.0 / norm } else { 0.0 };
-        for i in start..end {
-            data[i] *= inv_norm;
-        }
+        let norm: f32 = x[start..end].iter().map(|v| v * v).sum::<f32>().sqrt();
+        let inv = if norm > 1e-12 { 1.0 / norm } else { 0.0 };
+        for i in start..end { x[i] *= inv; }
     }
-    Tensor::from_data(data, x.shape.clone())
 }
 
-/// Outer product: a (N,) @ b (N,) -> (N, N)
-pub fn outer_product(a: &[f32], b: &[f32]) -> Vec<f32> {
+/// f32 mat-vec into pre-allocated output: out = mat @ vec (4-row ILP)
+pub fn mat_vec_mul_into(out: &mut [f32], mat: &Tensor, vec: &[f32]) {
+    let rows = mat.shape[0];
+    let cols = mat.shape[1];
+    let m = &mat.data;
+    let v = &vec[..cols];
+    let rows_4 = rows / 4 * 4;
+    for r in (0..rows_4).step_by(4) {
+        let row0 = &m[r * cols..(r + 1) * cols];
+        let row1 = &m[(r + 1) * cols..(r + 2) * cols];
+        let row2 = &m[(r + 2) * cols..(r + 3) * cols];
+        let row3 = &m[(r + 3) * cols..(r + 4) * cols];
+        let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for c in 0..cols {
+            let vc = v[c];
+            s0 += row0[c] * vc; s1 += row1[c] * vc;
+            s2 += row2[c] * vc; s3 += row3[c] * vc;
+        }
+        out[r] = s0; out[r + 1] = s1; out[r + 2] = s2; out[r + 3] = s3;
+    }
+    for r in rows_4..rows {
+        let row = &m[r * cols..(r + 1) * cols];
+        let mut sum = 0.0f32;
+        for c in 0..cols { sum += row[c] * v[c]; }
+        out[r] = sum;
+    }
+}
+
+/// Quantize f32 vec into reusable i8 buffer, returns scale.
+pub fn quantize_vec_i8_into(v: &[f32], q: &mut [i8]) -> f32 {
+    let mut abs_max = 0.0f32;
+    for &x in v { let a = x.abs(); if a > abs_max { abs_max = a; } }
+    let scale = if abs_max > 0.0 { abs_max / 127.0 } else { 1.0 };
+    let inv = 1.0 / scale;
+    for i in 0..v.len() {
+        q[i] = (v[i] * inv).round().clamp(-127.0, 127.0) as i8;
+    }
+    scale
+}
+
+/// Q8 mat-vec into pre-allocated output + reusable v_q buffer.
+pub fn q8_mat_vec_mul_into(out: &mut [f32], mat: &Q8Tensor, vec: &[f32], v_q: &mut [i8]) {
+    let rows = mat.rows;
+    let cols = mat.cols;
+    let v_scale = quantize_vec_i8_into(&vec[..cols], &mut v_q[..cols]);
+    let q = &mat.q_data;
+    let scales = &mat.scales;
+    let rows_4 = rows / 4 * 4;
+    for r in (0..rows_4).step_by(4) {
+        let q0 = &q[r * cols..(r + 1) * cols];
+        let q1 = &q[(r + 1) * cols..(r + 2) * cols];
+        let q2 = &q[(r + 2) * cols..(r + 3) * cols];
+        let q3 = &q[(r + 3) * cols..(r + 4) * cols];
+        let (mut s0, mut s1, mut s2, mut s3) = (0i32, 0i32, 0i32, 0i32);
+        for c in 0..cols {
+            let vc = v_q[c] as i32;
+            s0 += q0[c] as i32 * vc; s1 += q1[c] as i32 * vc;
+            s2 += q2[c] as i32 * vc; s3 += q3[c] as i32 * vc;
+        }
+        out[r] = s0 as f32 * (scales[r] * v_scale);
+        out[r + 1] = s1 as f32 * (scales[r + 1] * v_scale);
+        out[r + 2] = s2 as f32 * (scales[r + 2] * v_scale);
+        out[r + 3] = s3 as f32 * (scales[r + 3] * v_scale);
+    }
+    for r in rows_4..rows {
+        let qr = &q[r * cols..(r + 1) * cols];
+        let mut sum = 0i32;
+        for c in 0..cols { sum += qr[c] as i32 * v_q[c] as i32; }
+        out[r] = sum as f32 * (scales[r] * v_scale);
+    }
+}
+
+pub fn outer_product_into(out: &mut [f32], a: &[f32], b: &[f32]) {
     let n = a.len();
     let m = b.len();
-    let mut out = vec![0.0f32; n * m];
     for i in 0..n {
         for j in 0..m {
             out[i * m + j] = a[i] * b[j];
         }
     }
-    out
 }
 
-/// Small matrix multiply: A (N,N) @ B (N,N) -> C (N,N)
-pub fn mat_mat_mul_small(a: &[f32], b: &[f32], n: usize) -> Vec<f32> {
-    let mut c = vec![0.0f32; n * n];
+pub fn mat_mat_mul_small_into(c: &mut [f32], a: &[f32], b: &[f32], n: usize) {
+    for v in c[..n * n].iter_mut() { *v = 0.0; }
     for i in 0..n {
         for k in 0..n {
             let a_ik = a[i * n + k];
@@ -563,20 +618,14 @@ pub fn mat_mat_mul_small(a: &[f32], b: &[f32], n: usize) -> Vec<f32> {
             }
         }
     }
-    c
 }
 
-/// Small matrix-vector multiply: A (N,N) @ v (N,) -> (N,)
-pub fn mat_vec_mul_small(a: &[f32], v: &[f32], n: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; n];
+pub fn mat_vec_mul_small_into(out: &mut [f32], a: &[f32], v: &[f32], n: usize) {
     for i in 0..n {
         let mut sum = 0.0f32;
-        for j in 0..n {
-            sum += a[i * n + j] * v[j];
-        }
+        for j in 0..n { sum += a[i * n + j] * v[j]; }
         out[i] = sum;
     }
-    out
 }
 
 /// Softmax over a 1D tensor

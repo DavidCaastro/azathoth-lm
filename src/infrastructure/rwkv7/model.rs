@@ -140,6 +140,73 @@ impl Rwkv7State {
     }
 }
 
+/// Pre-allocated workspace for zero-allocation forward pass.
+/// Allocated once at model load, reused every token (~1400 allocs/token eliminated).
+pub struct Scratch {
+    // D-sized buffers
+    x: Vec<f32>,
+    ln_buf: Vec<f32>,
+    xx: Vec<f32>,
+    xr: Vec<f32>,
+    xw: Vec<f32>,
+    xk: Vec<f32>,
+    xv: Vec<f32>,
+    xa: Vec<f32>,
+    xg: Vec<f32>,
+    r: Vec<f32>,
+    k: Vec<f32>,
+    v: Vec<f32>,
+    w_full: Vec<f32>,
+    a: Vec<f32>,
+    kk: Vec<f32>,
+    k_mod: Vec<f32>,
+    v_out: Vec<f32>,
+    out_vec: Vec<f32>,
+    out_normed: Vec<f32>,
+    gated: Vec<f32>,
+    g: Vec<f32>,
+    lora_d: Vec<f32>,
+    tm_out: Vec<f32>,
+    cm_out: Vec<f32>,
+    // LoRA intermediate
+    lora_tmp: Vec<f32>,
+    // FFN (d_ffn sized)
+    ffn_proj: Vec<f32>,
+    ffn_act: Vec<f32>,
+    // Per-head (N*N)
+    vk: Vec<f32>,
+    ab: Vec<f32>,
+    s_ab: Vec<f32>,
+    // Per-head (N)
+    kk_a: Vec<f32>,
+    neg_kk: Vec<f32>,
+    out_h: Vec<f32>,
+    // Q8 quantization buffer
+    v_q: Vec<i8>,
+}
+
+impl Scratch {
+    fn new(d: usize, n: usize, d_ffn: usize, max_lora: usize) -> Self {
+        let nn = n * n;
+        Self {
+            x: vec![0.0; d], ln_buf: vec![0.0; d],
+            xx: vec![0.0; d], xr: vec![0.0; d], xw: vec![0.0; d],
+            xk: vec![0.0; d], xv: vec![0.0; d], xa: vec![0.0; d], xg: vec![0.0; d],
+            r: vec![0.0; d], k: vec![0.0; d], v: vec![0.0; d],
+            w_full: vec![0.0; d], a: vec![0.0; d], kk: vec![0.0; d],
+            k_mod: vec![0.0; d], v_out: vec![0.0; d],
+            out_vec: vec![0.0; d], out_normed: vec![0.0; d],
+            gated: vec![0.0; d], g: vec![0.0; d],
+            lora_d: vec![0.0; d], tm_out: vec![0.0; d], cm_out: vec![0.0; d],
+            lora_tmp: vec![0.0; max_lora],
+            ffn_proj: vec![0.0; d_ffn], ffn_act: vec![0.0; d_ffn],
+            vk: vec![0.0; nn], ab: vec![0.0; nn], s_ab: vec![0.0; nn],
+            kk_a: vec![0.0; n], neg_kk: vec![0.0; n], out_h: vec![0.0; n],
+            v_q: vec![0; d_ffn.max(d)],
+        }
+    }
+}
+
 impl Rwkv7Model {
     /// Load model from a SafeTensors file.
     /// Expects HuggingFace-format keys (model.layers.N.att.xxx).
@@ -254,189 +321,188 @@ impl Rwkv7Model {
         Self { config, emb, layers, ln_out_w, ln_out_b, head_w }
     }
 
-    /// Single-step forward pass (RNN mode).
-    /// Returns logits (V,) and mutates state in-place.
-    pub fn forward(&self, token: usize, state: &mut Rwkv7State) -> Tensor {
+    /// Create a pre-allocated scratch workspace for zero-alloc forward passes.
+    pub fn create_scratch(&self) -> Scratch {
+        let d = self.config.n_embd;
+        let n = self.config.head_size;
+        let d_ffn = self.layers[0].channel_mix.key_w.shape().0;
+        let max_lora = self.layers.iter().map(|lw| {
+            let tm = &lw.time_mix;
+            *[tm.w1.shape[0], tm.a1.shape[0], tm.g1.shape[0], tm.v1.shape[0]]
+                .iter().max().unwrap()
+        }).max().unwrap();
+        let s = Scratch::new(d, n, d_ffn, max_lora);
+        let mem_kb = std::mem::size_of_val(&s) as f64 / 1024.0
+            + (d * 24 + max_lora + d_ffn * 2 + n * n * 3 + n * 3) as f64 * 4.0 / 1024.0
+            + d_ffn as f64 / 1024.0;
+        eprintln!("[rwkv7] scratch: {:.1} KB pre-allocated (zero-alloc forward)", mem_kb);
+        s
+    }
+
+    /// Single-step forward pass (RNN mode), zero allocation.
+    /// Writes logits into out_logits (V-sized slice).
+    pub fn forward_into(&self, token: usize, state: &mut Rwkv7State, scratch: &mut Scratch, out_logits: &mut [f32]) {
         let d = self.config.n_embd;
         let h = self.config.n_head;
         let n = self.config.head_size;
 
-        // Embedding lookup (already LayerNorm'd)
+        // Embedding lookup — zero alloc
         let emb_start = token * d;
-        let mut x = Tensor::from_data(
-            self.emb.data[emb_start..emb_start + d].to_vec(),
-            vec![d],
-        );
+        scratch.x.copy_from_slice(&self.emb.data[emb_start..emb_start + d]);
 
         for i in 0..self.config.n_layer {
             let lw = &self.layers[i];
 
             // Time mixing
-            let xx = layer_norm(&x, &lw.ln1_w, &lw.ln1_b, 1e-5);
-            let (tm_out, new_v_first) = time_mixing(
-                i, h, n, &xx,
-                &state.x_prev_att[i],
-                &state.v_first,
-                &mut state.state_mat[i],
-                &lw.time_mix,
-            );
-            state.x_prev_att[i] = xx;
-            state.v_first = new_v_first;
-            x = add(&x, &tm_out);
+            layer_norm_into(&mut scratch.ln_buf, &scratch.x,
+                            &lw.ln1_w.data, &lw.ln1_b.data, 1e-5);
+            time_mixing_scratch(scratch, i, h, n,
+                                &state.x_prev_att[i].data,
+                                &state.v_first.data,
+                                &mut state.state_mat[i],
+                                &lw.time_mix);
+            state.x_prev_att[i].data.copy_from_slice(&scratch.ln_buf);
+            if i == 0 {
+                state.v_first.data.copy_from_slice(&scratch.v);
+            }
+            add_inplace(&mut scratch.x, &scratch.tm_out);
 
             // Channel mixing
-            let xx = layer_norm(&x, &lw.ln2_w, &lw.ln2_b, 1e-5);
-            let cm_out = channel_mixing(&xx, &state.x_prev_ffn[i], &lw.channel_mix);
-            state.x_prev_ffn[i] = xx;
-            x = add(&x, &cm_out);
-
+            layer_norm_into(&mut scratch.ln_buf, &scratch.x,
+                            &lw.ln2_w.data, &lw.ln2_b.data, 1e-5);
+            channel_mixing_scratch(scratch,
+                                   &state.x_prev_ffn[i].data,
+                                   &lw.channel_mix);
+            state.x_prev_ffn[i].data.copy_from_slice(&scratch.ln_buf);
+            add_inplace(&mut scratch.x, &scratch.cm_out);
         }
 
-        // Final LayerNorm + head projection (auto-quantized)
-        x = layer_norm(&x, &self.ln_out_w, &self.ln_out_b, 1e-5);
-        self.head_w.mat_vec_mul(&x)
+        // Final LayerNorm + head projection
+        layer_norm_into(&mut scratch.ln_buf, &scratch.x,
+                        &self.ln_out_w.data, &self.ln_out_b.data, 1e-5);
+        self.head_w.mat_vec_mul_into(out_logits, &scratch.ln_buf, &mut scratch.v_q);
     }
 }
 
-fn time_mixing(
+/// Zero-allocation time mixing. Input x in s.ln_buf, output in s.tm_out.
+fn time_mixing_scratch(
+    s: &mut Scratch,
     layer_id: usize, h: usize, n: usize,
-    x: &Tensor,
-    x_prev: &Tensor,
-    v_first: &Tensor,
-    state: &mut Vec<f32>, // H*N*N flat
+    x_prev: &[f32],
+    v_first: &[f32],
+    state: &mut [f32],
     w: &TimeMixWeights,
-) -> (Tensor, Tensor) {
-    let d = x.numel();
+) {
+    let d = s.ln_buf.len();
 
-    // Step 1: Token shift
-    let xx = sub(x_prev, x);
-    let xr = add_scaled(x, &xx, &w.x_r);
-    let xw = add_scaled(x, &xx, &w.x_w);
-    let xk = add_scaled(x, &xx, &w.x_k);
-    let xv = add_scaled(x, &xx, &w.x_v);
-    let xa = add_scaled(x, &xx, &w.x_a);
-    let xg = add_scaled(x, &xx, &w.x_g);
+    // Step 1: Token shift (x is in s.ln_buf)
+    sub_into(&mut s.xx, x_prev, &s.ln_buf);
+    add_scaled_into(&mut s.xr, &s.ln_buf, &s.xx, &w.x_r.data);
+    add_scaled_into(&mut s.xw, &s.ln_buf, &s.xx, &w.x_w.data);
+    add_scaled_into(&mut s.xk, &s.ln_buf, &s.xx, &w.x_k.data);
+    add_scaled_into(&mut s.xv, &s.ln_buf, &s.xx, &w.x_v.data);
+    add_scaled_into(&mut s.xa, &s.ln_buf, &s.xx, &w.x_a.data);
+    add_scaled_into(&mut s.xg, &s.ln_buf, &s.xx, &w.x_g.data);
 
     // Step 2: Linear projections (auto-quantized)
-    let r = w.receptance_w.mat_vec_mul(&xr);
-    let k = w.key_w.mat_vec_mul(&xk);
-    let v = w.value_w.mat_vec_mul(&xv);
+    w.receptance_w.mat_vec_mul_into(&mut s.r, &s.xr, &mut s.v_q);
+    w.key_w.mat_vec_mul_into(&mut s.k, &s.xk, &mut s.v_q);
+    w.value_w.mat_vec_mul_into(&mut s.v, &s.xv, &mut s.v_q);
 
     // Step 3: Data-dependent decay
-    let w_lora = mat_vec_mul(&w.w2, &tanh_t(&mat_vec_mul(&w.w1, &xw)));
-    let mut w_full = vec![0.0f32; d];
+    mat_vec_mul_into(&mut s.lora_tmp, &w.w1, &s.xw);
+    tanh_inplace(&mut s.lora_tmp);
+    mat_vec_mul_into(&mut s.lora_d, &w.w2, &s.lora_tmp);
     for i in 0..d {
-        let val = w.w0.data[i] + w_lora.data[i];
-        w_full[i] = (-0.606531 * (1.0 / (1.0 + (-val).exp()))).exp();
+        let val = w.w0.data[i] + s.lora_d[i];
+        s.w_full[i] = (-0.606531 * (1.0 / (1.0 + (-val).exp()))).exp();
     }
 
     // Step 4: 'a' gate
-    let a_lora = mat_vec_mul(&w.a2, &mat_vec_mul(&w.a1, &xa));
-    let a = {
-        let mut data = vec![0.0f32; d];
-        for i in 0..d {
-            data[i] = 1.0 / (1.0 + (-(w.a0.data[i] + a_lora.data[i])).exp());
-        }
-        Tensor::from_data(data, vec![d])
-    };
+    mat_vec_mul_into(&mut s.lora_tmp, &w.a1, &s.xa);
+    mat_vec_mul_into(&mut s.lora_d, &w.a2, &s.lora_tmp);
+    for i in 0..d {
+        s.a[i] = 1.0 / (1.0 + (-(w.a0.data[i] + s.lora_d[i])).exp());
+    }
 
     // Step 5: Output gate
-    let g_lora_in = sigmoid(&mat_vec_mul(&w.g1, &xg));
-    let g = mat_vec_mul(&w.g2, &g_lora_in);
+    mat_vec_mul_into(&mut s.lora_tmp, &w.g1, &s.xg);
+    sigmoid_inplace(&mut s.lora_tmp);
+    mat_vec_mul_into(&mut s.g, &w.g2, &s.lora_tmp);
 
     // Step 6: Key normalization
-    let kk_raw = mul(&k, &w.k_k);
-    let kk = l2_normalize_per_head(&kk_raw, h, n);
+    mul_into(&mut s.kk, &s.k, &w.k_k.data);
+    l2_normalize_per_head_inplace(&mut s.kk, h, n);
 
     // Step 7: Key modification with 'a'
-    let mut k_mod = vec![0.0f32; d];
     for i in 0..d {
-        k_mod[i] = k.data[i] * (1.0 + (a.data[i] - 1.0) * w.k_a.data[i]);
+        s.k_mod[i] = s.k[i] * (1.0 + (s.a[i] - 1.0) * w.k_a.data[i]);
     }
 
     // Step 8: Value mixing with v_first
-    let mut v_out = v.data.clone();
-    let mut new_v_first = v_first.clone();
-    if layer_id == 0 {
-        new_v_first = Tensor::from_data(v.data.clone(), vec![d]);
-    } else {
-        let v_mix_lora = mat_vec_mul(&w.v2, &mat_vec_mul(&w.v1, &xv));
+    s.v_out.copy_from_slice(&s.v);
+    if layer_id != 0 {
+        mat_vec_mul_into(&mut s.lora_tmp, &w.v1, &s.xv);
+        mat_vec_mul_into(&mut s.lora_d, &w.v2, &s.lora_tmp);
         for i in 0..d {
-            let mix = 1.0 / (1.0 + (-(w.v0.data[i] + v_mix_lora.data[i])).exp());
-            v_out[i] = v_out[i] + (v_first.data[i] - v_out[i]) * mix;
+            let mix = 1.0 / (1.0 + (-(w.v0.data[i] + s.lora_d[i])).exp());
+            s.v_out[i] += (v_first[i] - s.v_out[i]) * mix;
         }
     }
 
-    // Step 9: State update (per head, in f32)
-    let mut out_vec = vec![0.0f32; d];
+    // Step 9: State update (per head)
     for head in 0..h {
-        let ho = head * n * n; // offset into state
-        let hd = head * n;     // offset into D-vectors
+        let ho = head * n * n;
+        let hd = head * n;
 
-        let v_h = &v_out[hd..hd + n];
-        let k_h = &k_mod[hd..hd + n];
-        let kk_h = &kk.data[hd..hd + n];
-        let a_h = &a.data[hd..hd + n];
-        let r_h = &r.data[hd..hd + n];
-        let w_h = &w_full[hd..hd + n];
+        outer_product_into(&mut s.vk, &s.v_out[hd..hd + n], &s.k_mod[hd..hd + n]);
 
-        // vk = v_h (N,1) @ k_h (1,N) => (N, N)
-        let vk = outer_product(v_h, k_h);
+        for j in 0..n { s.kk_a[j] = s.kk[hd + j] * s.a[hd + j]; }
+        for j in 0..n { s.neg_kk[j] = -s.kk[hd + j]; }
+        outer_product_into(&mut s.ab, &s.neg_kk, &s.kk_a);
 
-        // ab = (-kk_h) (N,1) @ (kk_h * a_h) (1,N) => (N, N)
-        let mut kk_a = vec![0.0f32; n];
-        for j in 0..n { kk_a[j] = kk_h[j] * a_h[j]; }
-        let mut neg_kk = vec![0.0f32; n];
-        for j in 0..n { neg_kk[j] = -kk_h[j]; }
-        let ab = outer_product(&neg_kk, &kk_a);
-
-        // S_new = S * diag(w) + S @ ab + vk
-        let s_ab = mat_mat_mul_small(&state[ho..ho + n * n], &ab, n);
+        mat_mat_mul_small_into(&mut s.s_ab, &state[ho..ho + n * n], &s.ab, n);
         for i in 0..n {
             for j in 0..n {
                 let idx = ho + i * n + j;
-                state[idx] = state[idx] * w_h[j] + s_ab[i * n + j] + vk[i * n + j];
+                state[idx] = state[idx] * s.w_full[hd + j] + s.s_ab[i * n + j] + s.vk[i * n + j];
             }
         }
 
-        // out_h = S_new @ r_h => (N,)
-        let out_h = mat_vec_mul_small(&state[ho..ho + n * n], r_h, n);
-        out_vec[hd..hd + n].copy_from_slice(&out_h);
+        mat_vec_mul_small_into(&mut s.out_h, &state[ho..ho + n * n], &s.r[hd..hd + n], n);
+        s.out_vec[hd..hd + n].copy_from_slice(&s.out_h);
     }
 
-    // Step 10: GroupNorm (H groups of N)
-    let out_tensor = Tensor::from_data(out_vec, vec![d]);
-    let mut out_normed = group_norm(&out_tensor, h, &w.ln_x_w, &w.ln_x_b, 64e-5);
+    // Step 10: GroupNorm
+    group_norm_into(&mut s.out_normed, &s.out_vec, h,
+                    &w.ln_x_w.data, &w.ln_x_b.data, 64e-5);
 
     // Step 11: Bonus (r * k * r_k per head, summed, scaled by v)
     for head in 0..h {
         let hd = head * n;
         let mut bonus_sum = 0.0f32;
         for j in 0..n {
-            bonus_sum += r.data[hd + j] * k.data[hd + j] * w.r_k.data[hd + j];
+            bonus_sum += s.r[hd + j] * s.k[hd + j] * w.r_k.data[hd + j];
         }
         for j in 0..n {
-            out_normed.data[hd + j] += bonus_sum * v_out[hd + j];
+            s.out_normed[hd + j] += bonus_sum * s.v_out[hd + j];
         }
     }
 
-    // Step 12: Apply output gate and project
-    let mut gated = vec![0.0f32; d];
+    // Step 12: Gate + output projection
     for i in 0..d {
-        gated[i] = out_normed.data[i] * g.data[i];
+        s.gated[i] = s.out_normed[i] * s.g[i];
     }
-    let gated_tensor = Tensor::from_data(gated, vec![d]);
-    let output = w.output_w.mat_vec_mul(&gated_tensor);
-
-    (output, new_v_first)
+    w.output_w.mat_vec_mul_into(&mut s.tm_out, &s.gated, &mut s.v_q);
 }
 
-fn channel_mixing(x: &Tensor, x_prev: &Tensor, w: &ChannelMixWeights) -> Tensor {
-    let xx = sub(x_prev, x);
-    let k = add_scaled(x, &xx, &w.x_k);
-    let k_proj = w.key_w.mat_vec_mul(&k);
-    let k_act = squared_relu(&k_proj);
-    w.value_w.mat_vec_mul(&k_act)
+/// Zero-allocation channel mixing. Input x in s.ln_buf, output in s.cm_out.
+fn channel_mixing_scratch(s: &mut Scratch, x_prev: &[f32], w: &ChannelMixWeights) {
+    sub_into(&mut s.xx, x_prev, &s.ln_buf);
+    add_scaled_into(&mut s.xr, &s.ln_buf, &s.xx, &w.x_k.data);
+    w.key_w.mat_vec_mul_into(&mut s.ffn_proj, &s.xr, &mut s.v_q);
+    squared_relu_into(&mut s.ffn_act, &s.ffn_proj);
+    w.value_w.mat_vec_mul_into(&mut s.cm_out, &s.ffn_act, &mut s.v_q);
 }
 
 // ---- Weight loading helpers ----

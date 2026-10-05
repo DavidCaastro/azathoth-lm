@@ -58,6 +58,7 @@
 | BPB Q8 int-accum (enwik8 10KB) | 1.2797 | 2026-10-05 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
 | bytes/s | **117** | **2026-10-05** |
+| allocs/token | **~0** (scratch arena) | **2026-10-05** |
 | MB RAM (Q8 all layers) | **~130** | **2026-10-05** |
 | ms/tok | ~34 | 2026-10-05 |
 | BPB/Mparam | 0.0130 | 2026-10-05 |
@@ -227,6 +228,24 @@ AVX-VNNI implemented and KILLED (-33% speed, pipeline is memory-bound not comput
 | RNS | Rejected | Carry-free irrelevant on CPU (1-cycle adds) |
 | Stochastic | Rejected | Precision O(1/sqrt(N)), CPU-impractical |
 | Posit | Rejected | 4-20x slower in software |
+
+## Scratch Arena / Buffer Reuse (2026-10-05)
+
+Pre-allocated 149 KB workspace eliminates ~1400 heap allocations per token.
+All intermediate tensors in `forward()` → `time_mixing()` → `channel_mixing()`
+now write into reusable buffers instead of allocating new Vec each call.
+
+| Metric | Before (allocating) | After (scratch) | Delta |
+|---|---|---|---|
+| BPB 10KB | 1.2797 | 1.2797 | 0.0000 (identical) |
+| BPB 100KB | 1.2984 | 1.2984 | 0.0000 (identical) |
+| Speed 10KB (same-session) | 80 B/s | 117 B/s | **+46%** |
+| Allocs/token | ~1400 | ~0 | **-99.9%** |
+| Scratch memory | 0 | 149 KB | one-time |
+
+Key insight: Rust iterator patterns (`.iter_mut().zip()`) are critical for
+auto-vectorization. Index-based loops (`for i in 0..n { out[i] = ... }`) produced
+30% slower code due to missed SIMD opportunities.
 
 ## Roadmap
 

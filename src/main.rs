@@ -127,6 +127,7 @@ fn cmd_baseline(args: &[String]) {
 
     // Run forward pass and measure cross-entropy
     let mut state = Rwkv7State::new(&model.config);
+    let mut scratch = model.create_scratch();
     let mut tracker = ProgressTracker::new(total_bytes);
     let mut logger = log_path.as_ref().map(|p| {
         eprintln!("[baseline] logging to: {}", p);
@@ -136,7 +137,7 @@ fn cmd_baseline(args: &[String]) {
     eprintln!("[baseline] starting evaluation ...");
     eprintln!();
 
-    let mut logits = crate::domain::tensor::Tensor::zeros(&[v]);
+    let mut logits = vec![0.0f32; v];
     let mut skipped = 0usize;
     let skip_active = skip_threshold > 0.0 && use_ensemble;
 
@@ -163,19 +164,19 @@ fn cmd_baseline(args: &[String]) {
             } else if use_mix {
                 // Adaptive mixer: compute components separately, combine with learned weights
                 let h = if adaptive_ngram {
-                    Some(entropy_from_logits(&logits.data))
+                    Some(entropy_from_logits(&logits))
                 } else {
                     None
                 };
                 let ng_bias = ngram.compute_bias(h);
                 let b_vec = bias.bias_vector();
-                mixer.combine(&logits.data, &ng_bias, b_vec)
+                mixer.combine(&logits, &ng_bias, b_vec)
             } else {
                 // Normal ensemble: RWKV + N-gram + bias
-                let mut el = logits.data.clone();
+                let mut el = logits.clone();
                 if use_ensemble {
                     let h = if adaptive_ngram {
-                        Some(entropy_from_logits(&logits.data))
+                        Some(entropy_from_logits(&logits))
                     } else {
                         None
                     };
@@ -196,7 +197,7 @@ fn cmd_baseline(args: &[String]) {
             if use_mix {
                 // Update mixer weights based on component contributions
                 let h = if adaptive_ngram {
-                    Some(entropy_from_logits(&logits.data))
+                    Some(entropy_from_logits(&logits))
                 } else {
                     None
                 };
@@ -221,7 +222,7 @@ fn cmd_baseline(args: &[String]) {
             } else if use_ensemble && lr_tau > 0.0 {
                 tracker.set_extra(format!("lr={:.4} surp={:.2}", snap.eff_lr, snap.ema_surprise));
             } else if use_ensemble && adaptive_ngram {
-                let h = entropy_from_logits(&logits.data);
+                let h = entropy_from_logits(&logits);
                 let beta = 0.6f32;
                 let s = ((1.0 - beta) + beta * (h / 5.5)).clamp(0.2, 2.5);
                 tracker.set_extra(format!("H={:.2} s={:.3}", h, s * ngram_scale));
@@ -247,7 +248,7 @@ fn cmd_baseline(args: &[String]) {
         }
 
         // Always run RWKV forward to maintain state
-        logits = model.forward(tok, &mut state);
+        model.forward_into(tok, &mut state, &mut scratch, &mut logits);
     }
 
     if skip_active {
@@ -305,17 +306,19 @@ fn cmd_rwkv_test(args: &[String]) {
     eprintln!("[rwkv-test] prompt: {:?} ({} tokens)", prompt, tokens.len());
 
     let mut state = Rwkv7State::new(&model.config);
+    let mut scratch = model.create_scratch();
 
     // Prefill: process all prompt tokens
-    let mut logits = crate::domain::tensor::Tensor::zeros(&[model.config.vocab_size]);
+    let mut logits = vec![0.0f32; model.config.vocab_size];
     let t_infer = std::time::Instant::now();
     for &tok in &tokens {
-        logits = model.forward(tok as usize, &mut state);
+        model.forward_into(tok as usize, &mut state, &mut scratch, &mut logits);
     }
     let prefill_ms = t_infer.elapsed().as_millis();
 
     // Show top-10 predictions after prompt
-    let probs = softmax(&logits);
+    let logits_tensor = crate::domain::tensor::Tensor::from_data(logits.clone(), vec![model.config.vocab_size]);
+    let probs = softmax(&logits_tensor);
     let mut indexed: Vec<(usize, f32)> = probs.data.iter().copied().enumerate().collect();
     indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
@@ -333,7 +336,8 @@ fn cmd_rwkv_test(args: &[String]) {
     eprint!("[rwkv-test] greedy generation: {}", prompt);
     let t_gen = std::time::Instant::now();
     for _ in 0..gen_count {
-        let probs = softmax(&logits);
+        let logits_tensor = crate::domain::tensor::Tensor::from_data(logits.clone(), vec![model.config.vocab_size]);
+        let probs = softmax(&logits_tensor);
         let mut best_idx = 0;
         let mut best_prob = 0.0f32;
         for (i, &p) in probs.data.iter().enumerate() {
@@ -345,7 +349,7 @@ fn cmd_rwkv_test(args: &[String]) {
         let token_bytes = tokenizer.decode_token(best_idx as u32);
         let token_str = String::from_utf8_lossy(token_bytes);
         eprint!("{}", token_str);
-        logits = model.forward(best_idx, &mut state);
+        model.forward_into(best_idx, &mut state, &mut scratch, &mut logits);
     }
     let gen_ms = t_gen.elapsed().as_millis();
     let total_tokens = tokens.len() + gen_count;
