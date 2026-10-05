@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::domain::tensor::*;
-use crate::domain::quant::{QuantMatrix, QuantLevel, auto_select};
+use crate::domain::quant::{QuantMatrix, QuantLevel, select_best};
 use crate::infrastructure::rwkv7::safetensors::SafeTensorsFile;
 
 pub struct Rwkv7Config {
@@ -190,16 +190,13 @@ impl Rwkv7Model {
             ln_out_b = st.load_tensor("ln_out.bias");
         }
 
-        // Auto-select quantization level based on model size
-        let n_params = config.n_layer * (4 * d * d + 2 * d * d * 4) + v * d; // approx
-        let recommended = QuantLevel::recommend(n_params);
-        eprintln!("[rwkv7] model ~{}M params → recommended quant: {}",
-                  n_params / 1_000_000, recommended.name());
-
-        // Smoke test on head matrix to validate quantization
-        eprintln!("[rwkv7] smoke testing {} on head matrix ...", recommended.name());
-        let (layer_level, report) = auto_select(&head_w_f32, recommended);
-        eprintln!("[rwkv7] quant smoke test: {}", report);
+        // Benchmark all quantization levels on head matrix, pick best
+        eprintln!("[rwkv7] benchmarking quantization levels ...");
+        let (layer_level, bench_results) = select_best(&head_w_f32);
+        for r in &bench_results {
+            eprintln!("[rwkv7]   {}", r);
+        }
+        eprintln!("[rwkv7] selected: {}", layer_level.name());
 
         // Head always Q8 (proven optimal for V×D)
         let head_w = Q8Tensor::from_f32(&head_w_f32);

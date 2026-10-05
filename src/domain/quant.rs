@@ -1,16 +1,23 @@
-//! Quantization module — reusable, auto-selecting, with smoke test validation.
+//! Quantization module — reusable, empirically auto-selecting.
 //!
 //! Provides a unified `QuantMatrix` enum that wraps f32, Q8, and Q4 weight
-//! matrices behind a single interface. Auto-selects the best quantization
-//! level based on model size and validates via smoke test at load time.
+//! matrices behind a single interface. At load time, benchmarks ALL available
+//! quantization levels on the actual data and picks the best balance of
+//! quality, speed, and memory.
 //!
 //! Usage:
-//!   let level = QuantLevel::recommend(n_params);
-//!   let (level, report) = auto_select(&sample_matrix, &test_vec, level);
+//!   let level = select_best(&sample_matrix);
 //!   let qm = QuantMatrix::from_f32(&tensor, level);
 //!   let result = qm.mat_vec_mul(&input_vec);
 
 use crate::domain::tensor::*;
+
+/// All quantization levels to benchmark.
+const ALL_LEVELS: &[QuantLevel] = &[
+    QuantLevel::F32,
+    QuantLevel::Q8,
+    QuantLevel::Q4 { group_size: 64 },
+];
 
 /// Quantization precision level.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,36 +28,11 @@ pub enum QuantLevel {
 }
 
 impl QuantLevel {
-    /// Recommend quantization level based on total model parameters.
-    ///
-    /// Heuristic based on empirical results:
-    /// - 1B+  params: Q4 viable (each param is redundant enough)
-    /// - 100M+ params: Q8 sweet spot (regularization benefit, R11 confirmed)
-    /// - <100M params: F32 safest (every param matters)
-    pub fn recommend(n_params: usize) -> Self {
-        if n_params >= 1_000_000_000 {
-            QuantLevel::Q4 { group_size: 64 }
-        } else if n_params >= 50_000_000 {
-            QuantLevel::Q8
-        } else {
-            QuantLevel::F32
-        }
-    }
-
     pub fn name(&self) -> &'static str {
         match self {
             QuantLevel::F32 => "F32",
             QuantLevel::Q8 => "Q8",
             QuantLevel::Q4 { .. } => "Q4",
-        }
-    }
-
-    /// Return the next safer (higher precision) level, or None if already F32.
-    fn fallback(&self) -> Option<QuantLevel> {
-        match self {
-            QuantLevel::Q4 { .. } => Some(QuantLevel::Q8),
-            QuantLevel::Q8 => Some(QuantLevel::F32),
-            QuantLevel::F32 => None,
         }
     }
 }
@@ -99,113 +81,146 @@ impl QuantMatrix {
             QuantMatrix::Q4(t) => (t.rows, t.cols),
         }
     }
-
-    /// The quantization level of this matrix.
-    pub fn level(&self) -> QuantLevel {
-        match self {
-            QuantMatrix::F32(_) => QuantLevel::F32,
-            QuantMatrix::Q8(_) => QuantLevel::Q8,
-            QuantMatrix::Q4(t) => QuantLevel::Q4 { group_size: t.group_size },
-        }
-    }
 }
 
-/// Result of a quantization smoke test.
-pub struct SmokeTestReport {
+/// Result of benchmarking a single quantization level.
+pub struct BenchResult {
     pub level: QuantLevel,
     pub max_abs_error: f32,
     pub mean_rel_error: f32,
-    pub passed: bool,
+    pub ns_per_mul: u64,
+    pub mem_bytes: usize,
+    pub quality_pass: bool,
+    pub score: f64,
 }
 
-impl std::fmt::Display for SmokeTestReport {
+impl std::fmt::Display for BenchResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: max_err={:.6}, mean_rel={:.4}% → {}",
+        let mem_kb = self.mem_bytes as f64 / 1024.0;
+        write!(f, "{:<3}  err={:.6}  rel={:.3}%  {:.1}us/mul  {:.0}KB  score={:.2}  {}",
                self.level.name(),
                self.max_abs_error,
                self.mean_rel_error * 100.0,
-               if self.passed { "PASS" } else { "FAIL" })
+               self.ns_per_mul as f64 / 1000.0,
+               mem_kb,
+               self.score,
+               if self.quality_pass { "PASS" } else { "FAIL" })
     }
 }
 
-/// Smoke test: compare quantized matmul against f32 reference.
+/// Benchmark all quantization levels on a sample matrix and select the best.
 ///
-/// Uses a deterministic pseudo-random test vector derived from the matrix
-/// itself (first row normalized), so no external RNG needed.
+/// Runs each level through:
+/// 1. Quality test: quantized matmul vs f32 reference (error thresholds)
+/// 2. Speed test: time N matmuls, measure ns/mul
+/// 3. Memory: measure quantized size
 ///
-/// Thresholds:
-/// - max_abs_error < 0.5: absolute error per output element
-/// - mean_rel_error < 0.05: mean relative error (5%)
-pub fn smoke_test(matrix: &Tensor, level: QuantLevel) -> SmokeTestReport {
-    let cols = matrix.shape[1];
+/// Score = speed_factor * memory_factor (higher is better, only among passing levels).
+/// Returns the best level and all benchmark results for reporting.
+pub fn select_best(sample_matrix: &Tensor) -> (QuantLevel, Vec<BenchResult>) {
+    let cols = sample_matrix.shape[1];
+    let test_vec = make_test_vector(sample_matrix, cols);
 
-    // Generate deterministic test vector from matrix content
-    let test_vec = make_test_vector(matrix, cols);
+    // F32 reference result (for quality comparison)
+    let ref_result = mat_vec_mul(sample_matrix, &test_vec);
 
-    // F32 reference
-    let ref_result = mat_vec_mul(matrix, &test_vec);
+    // F32 speed baseline (for relative scoring)
+    let f32_ns = bench_matmul_ns(sample_matrix, &test_vec);
 
-    // Quantized result
-    let qm = QuantMatrix::from_f32(matrix, level);
-    let q_result = qm.mat_vec_mul(&test_vec);
+    let f32_mem = sample_matrix.data.len() * 4;
 
-    // Compute errors
+    let mut results = Vec::with_capacity(ALL_LEVELS.len());
+
+    for &level in ALL_LEVELS {
+        // Quantize
+        let qm = QuantMatrix::from_f32(sample_matrix, level);
+        let q_result = qm.mat_vec_mul(&test_vec);
+
+        // Quality: error vs f32
+        let (max_abs, mean_rel) = compute_errors(&ref_result.data, &q_result.data);
+        let quality_pass = max_abs < 0.5 && mean_rel < 0.05;
+
+        // Speed: benchmark
+        let ns = bench_qm_ns(&qm, &test_vec);
+
+        // Memory
+        let mem = qm.mem_bytes();
+
+        // Score: speed_factor * memory_factor (both relative to f32)
+        // Higher = better. Only meaningful for passing levels.
+        let speed_factor = f32_ns as f64 / ns.max(1) as f64;
+        let memory_factor = f32_mem as f64 / mem.max(1) as f64;
+        let score = if quality_pass { speed_factor * memory_factor.sqrt() } else { 0.0 };
+
+        results.push(BenchResult {
+            level,
+            max_abs_error: max_abs,
+            mean_rel_error: mean_rel,
+            ns_per_mul: ns,
+            mem_bytes: mem,
+            quality_pass,
+            score,
+        });
+    }
+
+    // Pick the passing level with highest score
+    let best = results.iter()
+        .filter(|r| r.quality_pass)
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
+        .map(|r| r.level)
+        .unwrap_or(QuantLevel::F32);
+
+    (best, results)
+}
+
+/// Compute max absolute and mean relative error between two vectors.
+fn compute_errors(reference: &[f32], quantized: &[f32]) -> (f32, f32) {
     let mut max_abs = 0.0f32;
     let mut sum_rel = 0.0f32;
-    let mut count = 0usize;
-    for (r, q) in ref_result.data.iter().zip(q_result.data.iter()) {
-        let abs_err = (r - q).abs();
+    let n = reference.len();
+    for i in 0..n {
+        let abs_err = (reference[i] - quantized[i]).abs();
         if abs_err > max_abs { max_abs = abs_err; }
-        let denom = r.abs().max(1e-8);
+        let denom = reference[i].abs().max(1e-8);
         sum_rel += abs_err / denom;
-        count += 1;
     }
-    let mean_rel = sum_rel / count as f32;
-
-    let passed = max_abs < 0.5 && mean_rel < 0.05;
-
-    SmokeTestReport {
-        level,
-        max_abs_error: max_abs,
-        mean_rel_error: mean_rel,
-        passed,
-    }
+    (max_abs, sum_rel / n as f32)
 }
 
-/// Auto-select the best quantization level with smoke test validation.
-///
-/// Starts from `preferred` level and falls back to higher precision if
-/// the smoke test fails. Returns the chosen level and the passing report.
-pub fn auto_select(
-    sample_matrix: &Tensor,
-    preferred: QuantLevel,
-) -> (QuantLevel, SmokeTestReport) {
-    let mut level = preferred;
-    loop {
-        let report = smoke_test(sample_matrix, level);
-        if report.passed {
-            return (level, report);
-        }
-        eprintln!("[quant] {} failed smoke test (max_err={:.4}, rel={:.2}%), falling back",
-                  level.name(), report.max_abs_error, report.mean_rel_error * 100.0);
-        match level.fallback() {
-            Some(next) => level = next,
-            None => return (QuantLevel::F32, report), // F32 always passes
-        }
+/// Benchmark f32 mat_vec_mul: run multiple iterations, return median ns per call.
+fn bench_matmul_ns(matrix: &Tensor, vec: &Tensor) -> u64 {
+    let n_iters = 20;
+    let mut times = Vec::with_capacity(n_iters);
+    for _ in 0..n_iters {
+        let t0 = std::time::Instant::now();
+        let _ = mat_vec_mul(matrix, vec);
+        times.push(t0.elapsed().as_nanos() as u64);
     }
+    times.sort();
+    times[n_iters / 2] // median
+}
+
+/// Benchmark QuantMatrix mat_vec_mul: run multiple iterations, return median ns.
+fn bench_qm_ns(qm: &QuantMatrix, vec: &Tensor) -> u64 {
+    let n_iters = 20;
+    let mut times = Vec::with_capacity(n_iters);
+    for _ in 0..n_iters {
+        let t0 = std::time::Instant::now();
+        let _ = qm.mat_vec_mul(vec);
+        times.push(t0.elapsed().as_nanos() as u64);
+    }
+    times.sort();
+    times[n_iters / 2] // median
 }
 
 /// Generate a deterministic test vector from matrix content.
-/// Uses elements from the first row, normalized to [-1, 1].
 fn make_test_vector(matrix: &Tensor, cols: usize) -> Tensor {
     let mut data = vec![0.0f32; cols];
-    // Use diagonal-ish pattern from matrix for diversity
     let rows = matrix.shape[0];
     for c in 0..cols {
         let r = c % rows;
         data[c] = matrix.data[r * cols + c];
     }
-    // Normalize
     let max_val = data.iter().fold(0.0f32, |a, &x| a.max(x.abs())).max(1e-8);
     for v in &mut data {
         *v /= max_val;
