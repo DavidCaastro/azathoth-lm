@@ -15,6 +15,8 @@
 | Phase 1 — Q8 all layers (100KB) | **1.2984** | Q8 int-accum + VNNI, 162 B/s, -75% RAM (BEST) |
 | Phase 1 — Arithmetic coder (1KB) | 1.1680 | Range coder CDF-24, roundtrip verified |
 | Phase 1 — Arithmetic coder (10KB) | 1.3320 | Compressed BPB, CE=1.2812, overhead=0.0508 |
+| Phase 1 — CM standalone (100KB) | 2.4078 | 9 bit-level models, logistic mixer, 78 MB |
+| Phase 1 — CM standalone (1MB) | 2.0915 | Beats gzip (2.58), 220K B/s |
 
 100KB "quick" eval. Full enwik8 now feasible: 162 B/s → ~7 days (was ~25 days at 46 B/s).
 

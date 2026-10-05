@@ -9,6 +9,7 @@ use crate::domain::ngram::TokenNgram;
 use crate::domain::bias_head::BiasHead;
 use crate::domain::mixer::AdaptiveMixer;
 use crate::domain::coder::{Cdf, RangeEncoder, RangeDecoder};
+use crate::domain::cm::ContextMixer;
 use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot};
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
@@ -23,6 +24,7 @@ fn main() {
     match args[1].as_str() {
         "compress" => cmd_compress(&args[2..]),
         "decompress" => cmd_decompress(&args[2..]),
+        "cm-eval" => cmd_cm_eval(&args[2..]),
         "baseline" => cmd_baseline(&args[2..]),
         "rwkv-test" => cmd_rwkv_test(&args[2..]),
         "info" => todo!("Checkpoint info"),
@@ -36,6 +38,7 @@ fn print_usage() {
     eprintln!("Commands:");
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
+    eprintln!("  cm-eval     --input PATH [--bytes N]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -318,6 +321,61 @@ fn cmd_decompress(args: &[String]) {
     eprintln!("[decompress] output: {} ({} bytes)", output_path, output_bytes.len());
     eprintln!("[decompress] time: {:.1}s ({:.1} tok/s)", elapsed, token_count as f64 / elapsed);
     eprintln!("[decompress] done.");
+}
+
+fn cmd_cm_eval(args: &[String]) {
+    let mut input_path = "data/enwik8".to_string();
+    let mut max_bytes: usize = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--input" => { i += 1; input_path = args[i].clone(); }
+            "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let raw_bytes = std::fs::read(&input_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {}", input_path, e));
+    let total_bytes = if max_bytes > 0 { max_bytes.min(raw_bytes.len()) } else { raw_bytes.len() };
+    let input_slice = &raw_bytes[..total_bytes];
+
+    let mut cm = ContextMixer::new();
+    let mem_mb = cm.memory_bytes() as f64 / (1024.0 * 1024.0);
+    eprintln!("[cm-eval] input: {} ({} bytes)", input_path, total_bytes);
+    eprintln!("[cm-eval] models: 9 (orders 0-8), hash tables: {:.1} MB", mem_mb);
+    eprintln!("[cm-eval] evaluating ...");
+    eprintln!();
+
+    let t_start = std::time::Instant::now();
+    let mut total_bits = 0.0f64;
+    let report_interval = (total_bytes / 4).max(1000);
+
+    for (pos, &byte) in input_slice.iter().enumerate() {
+        total_bits += cm.process_byte(byte);
+
+        if (pos + 1) % report_interval == 0 || pos + 1 == total_bytes {
+            let elapsed = t_start.elapsed().as_secs_f64();
+            let bpb = total_bits / (pos + 1) as f64;
+            let bps = (pos + 1) as f64 / elapsed;
+            eprint!("\r[cm-eval] {:.1}% | {}/{} bytes | {:.4} BPB | {:.0} B/s   ",
+                    100.0 * (pos + 1) as f64 / total_bytes as f64,
+                    pos + 1, total_bytes, bpb, bps);
+        }
+    }
+
+    let elapsed = t_start.elapsed().as_secs_f64();
+    let final_bpb = total_bits / total_bytes as f64;
+    eprintln!();
+    eprintln!();
+    eprintln!("[cm-eval] results:");
+    eprintln!("  input:       {} bytes", total_bytes);
+    eprintln!("  total bits:  {:.1}", total_bits);
+    eprintln!("  BPB:         {:.4}", final_bpb);
+    eprintln!("  time:        {:.1}s ({:.0} B/s)", elapsed, total_bytes as f64 / elapsed);
+    eprintln!("  hash memory: {:.1} MB", mem_mb);
 }
 
 fn cmd_baseline(args: &[String]) {

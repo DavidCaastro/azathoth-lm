@@ -236,6 +236,7 @@ statistical exact-match + temporal mixing.
 | Scratch arena (buffer reuse) | +46% speed (80→117 B/s), ~0 allocs | 2026-10-05 |
 | AVX-VNNI post-scratch | +38% speed (117→162 B/s) | 2026-10-05 |
 | P1.1: Arithmetic coder (CDF-24) | 1.3320 compressed BPB (10KB), roundtrip OK | 2026-10-05 |
+| P1.2: Byte-level CM (standalone) | 2.09 BPB (1MB), 9 models, 78 MB, 220K B/s | 2026-10-05 |
 
 ## Constraints
 
