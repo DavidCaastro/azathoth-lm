@@ -12,9 +12,9 @@
 | Phase 0 — dynamic lr | 1.2997 | surprise-modulated tau=2000, 10KB (KILLED) |
 | Phase 0 — adaptive mixer (10KB) | 1.2997 | learned weights eta=0.10, 10KB |
 | Phase 0 — adaptive mixer (100KB) | 1.3238 | learned weights eta=0.01, 100KB |
-| Phase 1 — Q8 all layers (100KB) | **1.2984** | Q8 int-accum, 117 B/s, -75% RAM (BEST) |
+| Phase 1 — Q8 all layers (100KB) | **1.2984** | Q8 int-accum + VNNI, 162 B/s, -75% RAM (BEST) |
 
-100KB "quick" eval. Full enwik8 now feasible: 117 B/s → ~10 days (was ~25 days at 46 B/s).
+100KB "quick" eval. Full enwik8 now feasible: 162 B/s → ~7 days (was ~25 days at 46 B/s).
 
 ## Target Landscape (enwik8)
 
@@ -57,10 +57,10 @@
 | **BPB Q8 int-accum (enwik8 100KB)** | **1.2984** | **2026-10-05** |
 | BPB Q8 int-accum (enwik8 10KB) | 1.2797 | 2026-10-05 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
-| bytes/s | **117** | **2026-10-05** |
+| bytes/s | **162** | **2026-10-05** |
 | allocs/token | **~0** (scratch arena) | **2026-10-05** |
 | MB RAM (Q8 all layers) | **~130** | **2026-10-05** |
-| ms/tok | ~34 | 2026-10-05 |
+| ms/tok | ~6.2 | 2026-10-05 |
 | BPB/Mparam | 0.0130 | 2026-10-05 |
 | ARC-C | — | — |
 | HellaSwag | — | — |
@@ -97,8 +97,8 @@ components learn document patterns. Full enwik8 delta est. -0.07 to -0.10.
 
 ### Throughput Status
 
-At 117 B/s (Q8 all layers, int-accum kernel), full enwik8 ≈ 237h (~10 days).
-See R11 for Q8 quantization details, R03/R04 for further optimization.
+At 162 B/s (Q8 + AVX-VNNI + scratch arena), full enwik8 ≈ 171h (~7 days).
+See R11 for Q8 quantization details, R14 for VNNI and scratch arena.
 
 ## Scaling Results (R05, 2026-10-02)
 
@@ -213,14 +213,15 @@ PTQ ternary on 0.1B = catastrophic collapse (PPL >4000). QAT requires retraining
 RWKV SSM recurrence propagates quant noise. No neural compressor uses <Q8.
 
 Block-32 Q8 tested and KILLED (+0.0378 BPB, -34% speed on RWKV).
-AVX-VNNI implemented and KILLED (-33% speed, pipeline is memory-bound not compute-bound).
-**Real path: buffer reuse / arena allocator + per-row Q8** (address actual bottleneck).
+AVX-VNNI initially KILLED pre-scratch (-33% speed, memory-bound).
+**Re-evaluated post-scratch: VALIDATED.** +38% speed (162 B/s vs 117 B/s).
+Scratch arena eliminated cache pollution, shifting bottleneck from memory to compute.
 
 | System | Verdict | Reason |
 |---|---|---|
 | Block-32 Q8 | **KILLED** | +0.0378 BPB, -34% speed on RWKV (uniform weights) |
-| AVX-VNNI intrinsics | **KILLED** | -33% speed; memory-bound, not compute-bound |
-| Buffer reuse | **High priority** | 370 allocs/token pollute cache, 13% bandwidth util |
+| AVX-VNNI intrinsics | **VALIDATED** | +38% speed post-scratch (was -33% pre-scratch) |
+| Buffer reuse | **VALIDATED** | +46% speed, ~0 allocs/token (was ~1400) |
 | ANS | Adopt for coder | Industry-standard entropy coding |
 | Ternary (BitNet) | **KILLED** | PTQ collapse at 0.1B, can't retrain, +0.30-0.50 BPB |
 | Q4 | **KILLED** | +30% PPL on RWKV-7 0.1B, est. +0.15-0.40 BPB |
@@ -235,17 +236,21 @@ Pre-allocated 149 KB workspace eliminates ~1400 heap allocations per token.
 All intermediate tensors in `forward()` → `time_mixing()` → `channel_mixing()`
 now write into reusable buffers instead of allocating new Vec each call.
 
-| Metric | Before (allocating) | After (scratch) | Delta |
-|---|---|---|---|
-| BPB 10KB | 1.2797 | 1.2797 | 0.0000 (identical) |
-| BPB 100KB | 1.2984 | 1.2984 | 0.0000 (identical) |
-| Speed 10KB (same-session) | 80 B/s | 117 B/s | **+46%** |
-| Allocs/token | ~1400 | ~0 | **-99.9%** |
-| Scratch memory | 0 | 149 KB | one-time |
+| Metric | Before (allocating) | Scratch only | Scratch + VNNI | Delta (full) |
+|---|---|---|---|---|
+| BPB 10KB | 1.2797 | 1.2797 | 1.2797 | 0.0000 |
+| BPB 100KB | 1.2984 | 1.2984 | 1.2984 | 0.0000 |
+| Speed 10KB | 80 B/s | 117 B/s | 135 B/s | **+69%** |
+| Speed 100KB | 80 B/s | 117 B/s | 162 B/s | **+103%** |
+| Allocs/token | ~1400 | ~0 | ~0 | **-99.9%** |
+| Scratch memory | 0 | 149 KB | 149 KB | one-time |
 
-Key insight: Rust iterator patterns (`.iter_mut().zip()`) are critical for
-auto-vectorization. Index-based loops (`for i in 0..n { out[i] = ... }`) produced
-30% slower code due to missed SIMD opportunities.
+Key insights:
+- Rust iterator patterns (`.iter_mut().zip()`) are critical for auto-vectorization.
+  Index-based loops produced 30% slower code due to missed SIMD opportunities.
+- AVX-VNNI (VPDPBUSD) only helps AFTER cache pollution is eliminated. Pre-scratch
+  the CPU was 87% idle on DRAM fetches; faster arithmetic made it worse. Post-scratch,
+  state stays in L3 and VNNI's 4x throughput on i8 dot-products adds +38%.
 
 ## Roadmap
 

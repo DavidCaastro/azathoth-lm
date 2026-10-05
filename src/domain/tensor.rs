@@ -142,19 +142,9 @@ impl Q8Tensor {
     }
 }
 
-/// y = Q8_mat @ f32_vec using integer accumulation.
-/// Dispatches to AVX-VNNI kernel if available, otherwise scalar fallback.
+/// y = Q8_mat @ f32_vec using integer accumulation (allocating, for benchmarks).
+/// Hot path uses q8_mat_vec_mul_into instead.
 pub fn q8_mat_vec_mul(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
-    // VNNI kernel disabled: benchmarks show scalar auto-vectorized path is faster
-    // on our memory-bound workload (79 B/s VNNI vs 117 B/s scalar on i5-1235U).
-    // The CPU is idle ~87% waiting for DRAM; faster arithmetic doesn't help.
-    // Keeping VNNI code for future use when memory bandwidth improves (buffer reuse).
-    #[cfg(target_arch = "x86_64")]
-    {
-        if false && is_x86_feature_detected!("avxvnni") {
-            return unsafe { q8_mat_vec_mul_vnni(mat, vec) };
-        }
-    }
     q8_mat_vec_mul_scalar(mat, vec)
 }
 
@@ -230,29 +220,22 @@ unsafe fn hsum_i32_avx2(v: __m256i) -> i32 {
     _mm_cvtsi128_si32(_mm_add_epi32(sum2, hi32))
 }
 
-/// AVX-VNNI kernel: VPDPBUSD fuses 4x(u8*i8)+i32 per lane.
-/// Uses XOR 0x80 trick to convert i8 weights to u8, with correction term.
-/// 4-row ILP for latency hiding.
+/// AVX-VNNI kernel writing into pre-allocated buffers (zero allocation).
+/// v_q must already be quantized via quantize_vec_i8_into before calling.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avxvnni")]
-unsafe fn q8_mat_vec_mul_vnni(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
-    assert_eq!(vec.shape.len(), 1);
+unsafe fn q8_mat_vec_mul_vnni_into(out: &mut [f32], mat: &Q8Tensor, v_q: &[i8], v_scale: f32) {
     let rows = mat.rows;
     let cols = mat.cols;
-    assert_eq!(vec.shape[0], cols);
     assert_eq!(cols % 32, 0, "VNNI requires cols divisible by 32");
 
-    let v = &vec.as_slice()[..cols];
-    let (v_q, v_scale) = quantize_vec_i8(v);
-
     // Precompute correction: 128 * sum(v_q) — accounts for i8→u8 bias on weights
-    let sum_v: i32 = v_q.iter().map(|&x| x as i32).sum();
+    let sum_v: i32 = v_q[..cols].iter().map(|&x| x as i32).sum();
     let correction = 128i32 * sum_v;
 
     let bias = _mm256_set1_epi8(-128i8); // 0x80 for XOR trick
     let chunks = cols / 32;
 
-    let mut out = vec![0.0f32; rows];
     let q = mat.q_data.as_ptr();
     let v_ptr = v_q.as_ptr();
     let scales = &mat.scales;
@@ -308,8 +291,6 @@ unsafe fn q8_mat_vec_mul_vnni(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
         let d = hsum_i32_avx2(acc) - correction;
         out[r] = d as f32 * (scales[r] * v_scale);
     }
-
-    Tensor::from_data(out, vec![rows])
 }
 
 // ---- Q4 group-quantized tensor ----
@@ -567,10 +548,26 @@ pub fn quantize_vec_i8_into(v: &[f32], q: &mut [i8]) -> f32 {
 }
 
 /// Q8 mat-vec into pre-allocated output + reusable v_q buffer.
+/// Dispatches to AVX-VNNI kernel if available, otherwise scalar 4-row ILP.
 pub fn q8_mat_vec_mul_into(out: &mut [f32], mat: &Q8Tensor, vec: &[f32], v_q: &mut [i8]) {
-    let rows = mat.rows;
     let cols = mat.cols;
     let v_scale = quantize_vec_i8_into(&vec[..cols], &mut v_q[..cols]);
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avxvnni") && cols % 32 == 0 {
+            unsafe { q8_mat_vec_mul_vnni_into(out, mat, &v_q[..cols], v_scale) };
+            return;
+        }
+    }
+
+    q8_mat_vec_mul_scalar_into(out, mat, v_q, v_scale);
+}
+
+/// Scalar fallback for q8_mat_vec_mul_into: i8*i8→i32 with 4-row ILP.
+fn q8_mat_vec_mul_scalar_into(out: &mut [f32], mat: &Q8Tensor, v_q: &[i8], v_scale: f32) {
+    let rows = mat.rows;
+    let cols = mat.cols;
     let q = &mat.q_data;
     let scales = &mat.scales;
     let rows_4 = rows / 4 * 4;
