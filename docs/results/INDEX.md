@@ -18,6 +18,7 @@
 | Phase 1 — CM standalone (100KB) | 2.4078 | 9 bit-level models, logistic mixer, 78 MB |
 | Phase 1 — CM standalone (1MB) | 2.0915 | Beats gzip (2.58), 220K B/s |
 | Phase 1 — Hybrid CM+RWKV bridge (100KB) | **1.2924** | -0.0060 vs baseline, 169 B/s |
+| Phase 1 — Confidence skip (100KB) | KILLED | +0.0026 BPB at best, <3% speed gain |
 
 100KB "quick" eval. Full enwik8 now feasible: 162 B/s → ~7 days (was ~25 days at 46 B/s).
 

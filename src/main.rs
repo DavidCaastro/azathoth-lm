@@ -41,7 +41,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -385,6 +385,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut input_path = "data/enwik8".to_string();
     let mut weights_dir = "weights/rwkv7-0.1b".to_string();
     let mut max_bytes: usize = 0;
+    let mut skip_threshold: f32 = 0.0; // 0 = no skip
 
     let mut i = 0;
     while i < args.len() {
@@ -392,6 +393,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--input" => { i += 1; input_path = args[i].clone(); }
             "--weights" => { i += 1; weights_dir = args[i].clone(); }
             "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
+            "--skip" => { i += 1; skip_threshold = args[i].parse().unwrap(); }
             _ => {}
         }
         i += 1;
@@ -434,8 +436,18 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut scratch = model.create_scratch();
     let mut logits = vec![0.0f32; v];
 
-    let mut total_bits_hybrid = 0.0f64;
+    let skip_active = skip_threshold > 0.0;
+    let mode_str = if skip_active {
+        format!("hybrid + skip (threshold={:.2})", skip_threshold)
+    } else {
+        "hybrid (CM + RWKV bridge)".to_string()
+    };
+    eprintln!("[hybrid] mode: {}", mode_str);
+
+    let mut total_bits = 0.0f64;
     let mut byte_count = 0usize;
+    let mut skipped_tokens = 0usize;
+    let mut skipped_bytes = 0usize;
 
     eprintln!("[hybrid] evaluating ...");
     eprintln!();
@@ -457,40 +469,69 @@ fn cmd_hybrid_eval(args: &[String]) {
             );
             let probs = softmax(&tensor);
 
-            // Feed token probs into bridge for byte marginalization
-            bridge.set_token_probs(&probs.data, &tokenizer);
-            bridge.reset();
-        }
-
-        // Process each byte of this token
-        for &byte in tok_bytes {
-            if have_rwkv {
-                // Get byte-level probs from bridge, decompose to bit predictions
-                let byte_probs = bridge.byte_probs();
-                let rwkv_bit_preds = byte_probs_to_bit_preds(&byte_probs, byte);
-
-                // Hybrid: CM + RWKV bridge predictions
-                let bits = cm.process_byte_with_external(byte, &rwkv_bit_preds);
-                total_bits_hybrid += bits;
-
-                // Advance bridge position within the token
-                bridge.advance_byte(byte);
+            // Check confidence skip: top-1 probability
+            let top1_prob = if skip_active {
+                probs.data.iter().copied().fold(0.0f32, f32::max)
             } else {
-                // First token: CM only (no RWKV context yet)
-                let bits = cm.process_byte(byte);
-                total_bits_hybrid += bits;
+                0.0
+            };
+
+            if skip_active && top1_prob >= skip_threshold {
+                // SKIP: use RWKV token-level cross-entropy for this token
+                let prob_correct = probs.data[tok] as f64;
+                let token_bits = -prob_correct.max(1e-30).log2();
+                let n_bytes = tok_bytes.len();
+                let bits_per_byte = token_bits / n_bytes as f64;
+
+                for &byte in tok_bytes.iter() {
+                    total_bits += bits_per_byte;
+                    // Update CM history so it doesn't lose context
+                    cm.observe_byte(byte);
+                    byte_count += 1;
+
+                    if byte_count % report_interval == 0 || byte_count == total_bytes {
+                        let elapsed = t_start.elapsed().as_secs_f64();
+                        let bpb = total_bits / byte_count as f64;
+                        let bps = byte_count as f64 / elapsed;
+                        eprint!("\r[hybrid] {:.1}% | {}/{} bytes | {:.4} BPB | {:.0} B/s | skip {:.0}%   ",
+                                100.0 * byte_count as f64 / total_bytes as f64,
+                                byte_count, total_bytes, bpb, bps,
+                                100.0 * skipped_tokens as f64 / t.max(1) as f64);
+                    }
+                }
+
+                skipped_tokens += 1;
+                skipped_bytes += n_bytes;
+            } else {
+                // FULL HYBRID: bridge + CM
+                bridge.set_token_probs(&probs.data, &tokenizer);
+                bridge.reset();
+
+                for &byte in tok_bytes {
+                    let byte_probs = bridge.byte_probs();
+                    let rwkv_bit_preds = byte_probs_to_bit_preds(&byte_probs, byte);
+                    let bits = cm.process_byte_with_external(byte, &rwkv_bit_preds);
+                    total_bits += bits;
+                    bridge.advance_byte(byte);
+                    byte_count += 1;
+
+                    if byte_count % report_interval == 0 || byte_count == total_bytes {
+                        let elapsed = t_start.elapsed().as_secs_f64();
+                        let bpb = total_bits / byte_count as f64;
+                        let bps = byte_count as f64 / elapsed;
+                        eprint!("\r[hybrid] {:.1}% | {}/{} bytes | {:.4} BPB | {:.0} B/s | skip {:.0}%   ",
+                                100.0 * byte_count as f64 / total_bytes as f64,
+                                byte_count, total_bytes, bpb, bps,
+                                100.0 * skipped_tokens as f64 / t.max(1) as f64);
+                    }
+                }
             }
-
-            byte_count += 1;
-
-            // Progress report
-            if byte_count % report_interval == 0 || byte_count == total_bytes {
-                let elapsed = t_start.elapsed().as_secs_f64();
-                let bpb = total_bits_hybrid / byte_count as f64;
-                let bps = byte_count as f64 / elapsed;
-                eprint!("\r[hybrid] {:.1}% | {}/{} bytes | {:.4} BPB | {:.0} B/s   ",
-                        100.0 * byte_count as f64 / total_bytes as f64,
-                        byte_count, total_bytes, bpb, bps);
+        } else {
+            // First token: CM only (no RWKV context yet)
+            for &byte in tok_bytes {
+                let bits = cm.process_byte(byte);
+                total_bits += bits;
+                byte_count += 1;
             }
         }
 
@@ -499,19 +540,26 @@ fn cmd_hybrid_eval(args: &[String]) {
     }
 
     let elapsed = t_start.elapsed().as_secs_f64();
-    let hybrid_bpb = total_bits_hybrid / byte_count as f64;
+    let final_bpb = total_bits / byte_count as f64;
 
     eprintln!();
     eprintln!();
     eprintln!("[hybrid] results:");
     eprintln!("  input:       {} bytes ({} tokens)", byte_count, tokens.len());
-    eprintln!("  hybrid BPB:  {:.4} (CM + RWKV bridge)", hybrid_bpb);
+    eprintln!("  BPB:         {:.4} ({})", final_bpb, mode_str);
     eprintln!("  time:        {:.1}s ({:.0} B/s)", elapsed, byte_count as f64 / elapsed);
     eprintln!("  CM memory:   {:.1} MB", cm_mem_mb);
+    if skip_active {
+        let predictable = tokens.len() - 1; // exclude first token
+        let skip_pct = 100.0 * skipped_tokens as f64 / predictable.max(1) as f64;
+        eprintln!("  skipped:     {}/{} tokens ({:.1}%), {} bytes",
+                  skipped_tokens, predictable, skip_pct, skipped_bytes);
+    }
     eprintln!();
     eprintln!("[hybrid] reference points:");
     eprintln!("  CM standalone (100KB):   2.41 BPB");
     eprintln!("  RWKV ensemble (100KB):   1.30 BPB");
+    eprintln!("  hybrid no-skip (100KB):  1.2924 BPB");
     eprintln!("  target:                  < 1.0 BPB");
 }
 

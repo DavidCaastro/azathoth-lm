@@ -304,6 +304,26 @@ impl ContextMixer {
         self.process_byte_inner(byte, Some(external_bit_preds))
     }
 
+    /// Update CM state (history + hash tables) without measuring cost.
+    /// Used for confidence-skip: keeps CM context current for non-skipped bytes.
+    pub fn observe_byte(&mut self, byte: u8) {
+        let mut c: u16 = 1;
+        for j in 0..8u8 {
+            let bit = (byte >> (7 - j)) & 1;
+            for model in &mut self.models {
+                model.update(&self.history, self.history_len, self.max_history, c, bit);
+            }
+            c = (c << 1) | bit as u16;
+        }
+        if self.history.len() < self.max_history {
+            self.history.push(byte);
+        } else {
+            let idx = self.history_len % self.max_history;
+            self.history[idx] = byte;
+        }
+        self.history_len += 1;
+    }
+
     fn process_byte_inner(&mut self, byte: u8, external: Option<&[f32; 8]>) -> f64 {
         let n_cm = self.models.len();
         let total_inputs = if external.is_some() { n_cm + 1 } else { n_cm };

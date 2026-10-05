@@ -238,6 +238,7 @@ statistical exact-match + temporal mixing.
 | P1.1: Arithmetic coder (CDF-24) | 1.3320 compressed BPB (10KB), roundtrip OK | 2026-10-05 |
 | P1.2: Byte-level CM (standalone) | 2.09 BPB (1MB), 9 models, 78 MB, 220K B/s | 2026-10-05 |
 | P1.3: RWKV→byte bridge + hybrid | **1.2924 BPB** (100KB), -0.0060 vs baseline, 169 B/s | 2026-10-05 |
+| P1.4: Confidence skip | KILLED — <3% speed gain, RWKV dominates compute | 2026-10-05 |
 
 ## Constraints
 
