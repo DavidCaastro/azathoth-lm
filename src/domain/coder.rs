@@ -96,7 +96,7 @@ pub struct RangeEncoder {
     low: u64,
     range: u32,
     cache: u8,
-    ff_count: u32,
+    ff_count: u64,
     first: bool,
     output: Vec<u8>,
 }
@@ -176,6 +176,7 @@ impl RangeEncoder {
     pub fn size(&self) -> usize {
         self.output.len() + if self.first { 0 } else { 1 } + self.ff_count as usize
     }
+
 }
 
 /// Range decoder (mirrors encoder state transitions).

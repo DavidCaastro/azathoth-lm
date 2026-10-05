@@ -49,10 +49,21 @@ fn print_usage() {
 const MAGIC: &[u8; 8] = b"AZTH\x01\x00\x00\x00";
 
 /// Build CDF from logits for current prediction step.
+/// Uses f64 softmax to preserve tail precision for 65K vocab.
 fn cdf_from_logits(logits: &[f32]) -> Cdf {
-    let tensor = crate::domain::tensor::Tensor::from_data(logits.to_vec(), vec![logits.len()]);
-    let probs = softmax(&tensor);
-    Cdf::from_probs(&probs.data)
+    let n = logits.len();
+    // f64 log-sum-exp for numerical stability with large vocab
+    let max_l = logits.iter().copied().fold(f64::NEG_INFINITY, |a, b| a.max(b as f64));
+    let mut probs = Vec::with_capacity(n);
+    let mut sum = 0.0f64;
+    for &l in logits {
+        let e = ((l as f64) - max_l).exp();
+        probs.push(e);
+        sum += e;
+    }
+    let inv_sum = 1.0 / sum;
+    let probs_f32: Vec<f32> = probs.iter().map(|&p| (p * inv_sum) as f32).collect();
+    Cdf::from_probs(&probs_f32)
 }
 
 fn cmd_compress(args: &[String]) {
