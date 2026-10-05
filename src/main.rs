@@ -8,6 +8,7 @@ use crate::domain::tensor::{softmax, entropy_from_logits};
 use crate::domain::ngram::TokenNgram;
 use crate::domain::bias_head::BiasHead;
 use crate::domain::mixer::AdaptiveMixer;
+use crate::domain::coder::{Cdf, RangeEncoder, RangeDecoder};
 use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot};
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
@@ -20,7 +21,8 @@ fn main() {
     }
 
     match args[1].as_str() {
-        "compress" => todo!("Phase 1: CM + RWKV hybrid predictor"),
+        "compress" => cmd_compress(&args[2..]),
+        "decompress" => cmd_decompress(&args[2..]),
         "baseline" => cmd_baseline(&args[2..]),
         "rwkv-test" => cmd_rwkv_test(&args[2..]),
         "info" => todo!("Checkpoint info"),
@@ -32,10 +34,279 @@ fn print_usage() {
     eprintln!("azathoth-lm — hybrid CM + neural byte-level predictor");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  compress    --input PATH [--ckpt PATH]");
+    eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
+    eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
+}
+
+/// Compressed format:
+/// [8 bytes: magic "AZTH\x01\x00\x00\x00"]
+/// [4 bytes: total_input_bytes as u32 LE]
+/// [4 bytes: token_count as u32 LE]
+/// [N bytes: range-coded token stream]
+const MAGIC: &[u8; 8] = b"AZTH\x01\x00\x00\x00";
+
+/// Build CDF from logits for current prediction step.
+fn cdf_from_logits(logits: &[f32]) -> Cdf {
+    let tensor = crate::domain::tensor::Tensor::from_data(logits.to_vec(), vec![logits.len()]);
+    let probs = softmax(&tensor);
+    Cdf::from_probs(&probs.data)
+}
+
+fn cmd_compress(args: &[String]) {
+    let mut input_path = "data/enwik8".to_string();
+    let mut output_path = String::new();
+    let mut weights_dir = "weights/rwkv7-0.1b".to_string();
+    let mut max_bytes: usize = 0;
+    let mut bias_lr: f32 = 0.30;
+    let mut ngram_scale: f32 = 0.5;
+    let mut mix_eta: f32 = 0.01;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--input" => { i += 1; input_path = args[i].clone(); }
+            "--output" => { i += 1; output_path = args[i].clone(); }
+            "--weights" => { i += 1; weights_dir = args[i].clone(); }
+            "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
+            "--lr" => { i += 1; bias_lr = args[i].parse().unwrap(); }
+            "--ngram-scale" => { i += 1; ngram_scale = args[i].parse().unwrap(); }
+            "--mix-eta" => { i += 1; mix_eta = args[i].parse().unwrap(); }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if output_path.is_empty() {
+        eprintln!("error: --output PATH required");
+        std::process::exit(1);
+    }
+
+    // Load input
+    let raw_bytes = std::fs::read(&input_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {}", input_path, e));
+    let total_bytes = if max_bytes > 0 { max_bytes.min(raw_bytes.len()) } else { raw_bytes.len() };
+    let input_slice = &raw_bytes[..total_bytes];
+    eprintln!("[compress] input: {} ({} bytes)", input_path, total_bytes);
+
+    // Load tokenizer and model
+    let model_path = Path::new(&weights_dir).join("model.safetensors");
+    let vocab_path = Path::new(&weights_dir).join("rwkv_vocab_v20230424.txt");
+    let tokenizer = WorldTokenizer::load(&vocab_path);
+    let config = Rwkv7Config::from_weights_dir(&weights_dir);
+    let model = Rwkv7Model::load(&model_path, config);
+    let v = model.config.vocab_size;
+
+    // Tokenize
+    let tokens = tokenizer.encode(input_slice);
+    eprintln!("[compress] tokenized: {} tokens ({:.2} bytes/token)",
+              tokens.len(), total_bytes as f64 / tokens.len() as f64);
+
+    // Initialize ensemble + coder
+    let mut ngram = TokenNgram::new(4, v, ngram_scale);
+    let mut bias = BiasHead::new(v, bias_lr);
+    let mut mixer = AdaptiveMixer::new(mix_eta);
+    let mut enc = RangeEncoder::new();
+
+    let mut state = Rwkv7State::new(&model.config);
+    let mut scratch = model.create_scratch();
+    let mut logits = vec![0.0f32; v];
+    let mut ce_bits = 0.0f64; // cross-entropy bits for comparison
+
+    eprintln!("[compress] encoding ...");
+    let t_start = std::time::Instant::now();
+
+    for t in 0..tokens.len() {
+        let tok = tokens[t] as usize;
+
+        if t == 0 {
+            // First token: no context yet, encode with uniform CDF
+            let cdf = Cdf::uniform(v);
+            enc.encode_symbol(tok, &cdf);
+            let prob = 1.0 / v as f64;
+            ce_bits += -prob.log2();
+        } else {
+            // Build ensemble logits
+            let ng_bias = ngram.compute_bias(None);
+            let b_vec = bias.bias_vector();
+            let ensemble_logits = mixer.combine(&logits, &ng_bias, b_vec);
+
+            // Build CDF and encode
+            let cdf = cdf_from_logits(&ensemble_logits);
+            enc.encode_symbol(tok, &cdf);
+
+            // Track cross-entropy for comparison
+            let tensor = crate::domain::tensor::Tensor::from_data(
+                ensemble_logits, vec![v],
+            );
+            let probs = softmax(&tensor);
+            let prob = probs.data[tok] as f64;
+            ce_bits += -prob.max(1e-30).log2();
+
+            // Update online components AFTER encoding
+            mixer.update(&probs.data, &ngram.compute_bias(None), bias.bias_vector(), tok);
+            bias.update(&probs.data, tok);
+        }
+
+        ngram.observe(tok as u32);
+        model.forward_into(tok, &mut state, &mut scratch, &mut logits);
+
+        // Progress
+        if t > 0 && (t % 1000 == 0 || t == tokens.len() - 1) {
+            let elapsed = t_start.elapsed().as_secs_f64();
+            let pct = 100.0 * t as f64 / tokens.len() as f64;
+            let enc_size = enc.size();
+            eprint!("\r[compress] {:.1}% | {} tokens | ~{} bytes | {:.1} tok/s   ",
+                    pct, t, enc_size, t as f64 / elapsed);
+        }
+    }
+
+    let compressed = enc.finish();
+    let elapsed = t_start.elapsed().as_secs_f64();
+    eprintln!();
+
+    // Write output: header + compressed stream
+    let mut output = Vec::with_capacity(16 + compressed.len());
+    output.extend_from_slice(MAGIC);
+    output.extend_from_slice(&(total_bytes as u32).to_le_bytes());
+    output.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
+    output.extend_from_slice(&compressed);
+
+    std::fs::write(&output_path, &output)
+        .unwrap_or_else(|e| panic!("cannot write {}: {}", output_path, e));
+
+    let compressed_bpb = output.len() as f64 * 8.0 / total_bytes as f64;
+    let ce_bpb = ce_bits / total_bytes as f64;
+    let ratio = output.len() as f64 / total_bytes as f64;
+
+    eprintln!();
+    eprintln!("[compress] results:");
+    eprintln!("  input:          {} bytes", total_bytes);
+    eprintln!("  compressed:     {} bytes (ratio: {:.4})", output.len(), ratio);
+    eprintln!("  compressed BPB: {:.4}", compressed_bpb);
+    eprintln!("  cross-ent BPB:  {:.4}", ce_bpb);
+    eprintln!("  coder overhead: {:.4} BPB", compressed_bpb - ce_bpb);
+    eprintln!("  time:           {:.1}s ({:.1} tok/s)", elapsed, tokens.len() as f64 / elapsed);
+    eprintln!("  output:         {}", output_path);
+}
+
+fn cmd_decompress(args: &[String]) {
+    let mut input_path = String::new();
+    let mut output_path = String::new();
+    let mut weights_dir = "weights/rwkv7-0.1b".to_string();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--input" => { i += 1; input_path = args[i].clone(); }
+            "--output" => { i += 1; output_path = args[i].clone(); }
+            "--weights" => { i += 1; weights_dir = args[i].clone(); }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if input_path.is_empty() || output_path.is_empty() {
+        eprintln!("error: --input PATH and --output PATH required");
+        std::process::exit(1);
+    }
+
+    // Read compressed file
+    let data = std::fs::read(&input_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {}", input_path, e));
+
+    if data.len() < 16 || &data[..8] != MAGIC {
+        eprintln!("error: invalid compressed file (bad magic)");
+        std::process::exit(1);
+    }
+
+    let total_bytes = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+    let token_count = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+    let stream = &data[16..];
+
+    eprintln!("[decompress] compressed: {} bytes, original: {} bytes, {} tokens",
+              data.len(), total_bytes, token_count);
+
+    // Load tokenizer and model
+    let model_path = Path::new(&weights_dir).join("model.safetensors");
+    let vocab_path = Path::new(&weights_dir).join("rwkv_vocab_v20230424.txt");
+    let tokenizer = WorldTokenizer::load(&vocab_path);
+    let config = Rwkv7Config::from_weights_dir(&weights_dir);
+    let model = Rwkv7Model::load(&model_path, config);
+    let v = model.config.vocab_size;
+
+    // Initialize ensemble + decoder — must match compressor exactly
+    let mut ngram = TokenNgram::new(4, v, 0.5);
+    let mut bias = BiasHead::new(v, 0.30);
+    let mut mixer = AdaptiveMixer::new(0.01);
+    let mut dec = RangeDecoder::new(stream);
+
+    let mut state = Rwkv7State::new(&model.config);
+    let mut scratch = model.create_scratch();
+    let mut logits = vec![0.0f32; v];
+    let mut decoded_tokens: Vec<u32> = Vec::with_capacity(token_count);
+
+    eprintln!("[decompress] decoding ...");
+    let t_start = std::time::Instant::now();
+
+    for t in 0..token_count {
+        let tok = if t == 0 {
+            // First token: uniform CDF (no context), must match compressor
+            let cdf = Cdf::uniform(v);
+            dec.decode_symbol(&cdf) as u32
+        } else {
+            let ng_bias = ngram.compute_bias(None);
+            let b_vec = bias.bias_vector();
+            let ensemble_logits = mixer.combine(&logits, &ng_bias, b_vec);
+
+            let cdf = cdf_from_logits(&ensemble_logits);
+            let sym = dec.decode_symbol(&cdf);
+
+            // Update online components — must mirror compressor exactly
+            let tensor = crate::domain::tensor::Tensor::from_data(
+                ensemble_logits, vec![v],
+            );
+            let probs = softmax(&tensor);
+            mixer.update(&probs.data, &ngram.compute_bias(None), bias.bias_vector(), sym);
+            bias.update(&probs.data, sym);
+
+            sym as u32
+        };
+
+        decoded_tokens.push(tok);
+        ngram.observe(tok);
+        model.forward_into(tok as usize, &mut state, &mut scratch, &mut logits);
+
+        if t > 0 && (t % 1000 == 0 || t == token_count - 1) {
+            let elapsed = t_start.elapsed().as_secs_f64();
+            let pct = 100.0 * t as f64 / token_count as f64;
+            eprint!("\r[decompress] {:.1}% | {} tokens | {:.1} tok/s   ",
+                    pct, t, t as f64 / elapsed);
+        }
+    }
+    let elapsed = t_start.elapsed().as_secs_f64();
+    eprintln!();
+
+    // Decode tokens to bytes
+    let mut output_bytes = Vec::with_capacity(total_bytes);
+    for &tok in &decoded_tokens {
+        let bytes = tokenizer.decode_token(tok);
+        output_bytes.extend_from_slice(bytes);
+    }
+
+    if output_bytes.len() != total_bytes {
+        eprintln!("WARNING: decoded {} bytes, expected {}", output_bytes.len(), total_bytes);
+    }
+
+    std::fs::write(&output_path, &output_bytes)
+        .unwrap_or_else(|e| panic!("cannot write {}: {}", output_path, e));
+
+    eprintln!();
+    eprintln!("[decompress] output: {} ({} bytes)", output_path, output_bytes.len());
+    eprintln!("[decompress] time: {:.1}s ({:.1} tok/s)", elapsed, token_count as f64 / elapsed);
+    eprintln!("[decompress] done.");
 }
 
 fn cmd_baseline(args: &[String]) {

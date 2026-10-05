@@ -235,6 +235,7 @@ statistical exact-match + temporal mixing.
 | Q8 quantization (all layers) | 1.2984 BPB (-0.0254), -75% RAM | 2026-10-05 |
 | Scratch arena (buffer reuse) | +46% speed (80→117 B/s), ~0 allocs | 2026-10-05 |
 | AVX-VNNI post-scratch | +38% speed (117→162 B/s) | 2026-10-05 |
+| P1.1: Arithmetic coder (CDF-24) | 1.3320 compressed BPB (10KB), roundtrip OK | 2026-10-05 |
 
 ## Constraints
 

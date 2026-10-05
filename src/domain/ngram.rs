@@ -202,7 +202,7 @@ mod tests {
         }
         // After seeing [1, 2] twice, predicting next after [1, 2] should favor 3
         let mut logits = vec![0.0f32; 10];
-        ng.predict(&mut logits);
+        ng.predict(&mut logits, None);
         // Token 3 should have a positive bias (seen after context [1,2] once)
         // This is a basic sanity check
         assert!(ng.history_len == 5);
