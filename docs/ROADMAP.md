@@ -145,18 +145,21 @@ cross-model dependencies.
   Standard in cmix (3-layer mixer hierarchy).
 - **Heritage**: Cascaded SSE always overcorrects. Hierarchical by type untried.
 
-### P2.3: Multi-corpus Validation Suite
+### P2.3: Cross-Domain Validation Suite
 
-- **Impact**: Keeps system honest — prevents enwik8 overfitting
-- **Effort**: Low
+- **Impact**: Keeps system honest — prevents domain overfitting
+- **Effort**: Low-Medium (data sourcing + automation)
 - **Risk**: None
-- **Rationale**: Measure on multiple corpora to verify universality:
-  - enwik8 (English Wikipedia XML, 100MB) — primary benchmark
-  - enwik9 (1GB) — scale test
-  - Calgary corpus (mixed: text, binary, images) — classic benchmark
-  - Silesia corpus (mixed: source code, database, medical, images)
-  - Custom binary test (compiled executables, random mixed)
-- **Kill criteria**: If BPB improves on enwik8 but degrades on Silesia, overfitting.
+- **Rationale**: Full benchmark protocol defined in `docs/BENCHMARKS.md`.
+  11 categories across 9 data types: text (EN + non-EN), source code,
+  structured data, executables, scientific, multimedia raw, mixed archives,
+  pre-compressed. σ (cross-domain variance) and worst-domain BPB are
+  first-class metrics alongside mean BPB.
+  Compare against gzip, zstd-19, brotli-11, PAQ8px, lzma2.
+  Includes adversarial tests: random, repeated, domain-switch, pre-compressed.
+- **Anti-gaming**: No domain detection. No corpus-specific hyperparameters.
+  All adaptation must be data-driven and online.
+- **Kill criteria**: If σ increases while mean BPB improves, we're overfitting.
 
 ## Phase 3 — Frontier Techniques
 

@@ -44,29 +44,45 @@
 
 ## Benchmark Dashboard
 
+### Current Best (enwik8 — literature comparability)
+
 | Metric | Value | Date |
 |---|---|---|
-| BPB ensemble (enwik8 100KB) | 1.4086 | 2026-10-01 |
-| BPB ensemble (enwik8 10KB) | 1.3758 | 2026-10-01 |
-| BPB tuned ensemble (enwik8 10KB) | 1.3078 | 2026-10-02 |
-| BPB dynamic lr (enwik8 10KB) | 1.2997 | 2026-10-02 |
-| BPB tuned static (enwik8 100KB) | 1.3281 | 2026-10-02 |
-| BPB surprise tau=1000 (enwik8 100KB) | 1.3320 | 2026-10-02 (KILLED) |
-| BPB mixer eta=0.10 (enwik8 10KB) | 1.2997 | 2026-10-02 |
-| BPB mixer eta=0.10 (enwik8 100KB) | 1.3278 | 2026-10-02 |
-| BPB mixer eta=0.01 (enwik8 100KB) | 1.3238 | 2026-10-02 |
-| **BPB Q8 int-accum (enwik8 100KB)** | **1.2984** | **2026-10-05** |
-| BPB Q8 int-accum (enwik8 10KB) | 1.2797 | 2026-10-05 |
-| BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
+| **BPB Q8+VNNI (enwik8 100KB)** | **1.2984** | **2026-10-05** |
+| BPB Q8+VNNI (enwik8 10KB) | 1.2797 | 2026-10-05 |
 | bytes/s | **162** | **2026-10-05** |
 | allocs/token | **~0** (scratch arena) | **2026-10-05** |
 | MB RAM (Q8 all layers) | **~130** | **2026-10-05** |
-| ms/tok | ~6.2 | 2026-10-05 |
 | BPB/Mparam | 0.0130 | 2026-10-05 |
-| ARC-C | — | — |
-| HellaSwag | — | — |
-| MMLU | — | — |
-| Winogrande | — | — |
+
+### Cross-Domain (pending — requires arithmetic coder + byte-level CM)
+
+Full protocol in `docs/BENCHMARKS.md`. Will measure 11 categories across
+9 data types, with σ (neutrality) and worst-domain as primary metrics.
+
+| Category | azathoth | zstd-19 | PAQ8px | Status |
+|---|---|---|---|---|
+| Text EN (enwik8) | 1.2984 | — | — | Measured (100KB quick) |
+| Text non-EN | — | — | — | Pending |
+| Source code | — | — | — | Pending |
+| Structured (JSON) | — | — | — | Pending |
+| Executables | — | — | — | Pending |
+| Scientific | — | — | — | Pending |
+| Multimedia raw | — | — | — | Pending |
+| Mixed archive | — | — | — | Pending |
+| Pre-compressed | — | — | — | Pending |
+| **Mean** | — | — | — | — |
+| **σ (neutrality)** | — | — | — | — |
+
+### Historical (enwik8 progression)
+
+| Config | BPB 10KB | BPB 100KB | Date |
+|---|---|---|---|
+| RWKV-only | 1.4298 | 1.4691 | 2026-10-01 |
+| + ensemble (N-gram + bias) | 1.3758 | 1.4086 | 2026-10-01 |
+| + tuned (lr=0.30, scale=0.5) | 1.3078 | 1.3281 | 2026-10-02 |
+| + mixer (eta=0.01) | 1.3032 | 1.3238 | 2026-10-02 |
+| + Q8 quantization | 1.2797 | **1.2984** | 2026-10-05 |
 
 ## Phase 0 Details
 

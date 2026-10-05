@@ -46,33 +46,46 @@ Criterios de escalado:
 
 Esto permite ~10 hipotesis/dia en fase Smoke vs ~1/dia en Full.
 
-## Benchmarks obligatorios
+## Benchmarks
 
-Compresion (dominio actual, obligatorio en cada milestone):
-  - enwik8 BPB — Large Text Compression Benchmark
-  - compression ratio, throughput (B/s)
+Full protocol in `docs/BENCHMARKS.md`. Summary:
 
-LM (cuando RWKV integrado, via lm-eval-harness):
-  - Perplexity en WikiText-103
-  - ARC-Challenge (razonamiento)
-  - HellaSwag (sentido comun)
-  - MMLU (conocimiento multitarea)
-  - Winogrande (correferencia)
-  Ejecutar sobre neural.gguf exportado para comparabilidad directa
-  con SmolLM2, RWKV-7, Qwen, etc.
+Per milestone:
+  - enwik8 100KB quick eval (BPB, B/s) — regression test
+  - At least 2 non-text domains (rotation: binaries, code, scientific)
+  - All adversarial tests (random, repeated, domain-switch, pre-compressed)
+
+Per phase:
+  - Full cross-domain table (11 categories, 9 data types)
+  - Comparison vs gzip, zstd-19, brotli-11, PAQ8px, lzma2
+  - Practical metrics: throughput, RAM, decompress speed
+
+Key anti-gaming rules:
+  - No domain detection — adaptation must be data-driven and online
+  - No corpus-specific hyperparameters — fixed across all domains
+  - σ (cross-domain variance) and range are first-class metrics
+  - Worst domain reported prominently, not buried
 
 Eficiencia (siempre):
   - BPB / Mparam (eficiencia parametrica)
   - bytes/s (throughput)
   - MB RAM en inferencia (footprint)
 
+LM benchmarks (when GGUF export ready):
+  - WikiText-103 ppl, ARC-C, HellaSwag, MMLU, Winogrande
+  - Run on exported neural.gguf for direct comparability
+
 ## Metricas dashboard
 
 | Metrica | Tipo | Optimizar? |
 |---|---|---|
-| BPB (enwik8) | Primaria | SI — objetivo principal |
+| BPB mean (cross-domain) | Primaria | SI — objetivo principal |
+| σ BPB (cross-domain) | Primaria | SI — lower = more universal |
+| BPB (enwik8) | Comparativa | SI — literature comparability |
+| BPB worst domain | Primaria | SI — no catastrophic failures |
+| Ratio vs zstd -19 | Practica | > 1.5x mean to justify existence |
 | B/s | Secundaria | Trackear, no priorizar sobre BPB |
-| MB RAM | Secundaria | Trackear, alertar si >8 GB |
+| MB RAM | Secundaria | Trackear, alertar si >16 GB |
 | BPB/Mparam | Derivada | Indicador de eficiencia |
 | Per-bit cost [0-7] | Diagnostica | Identificar bottlenecks |
 | Per-model contribution | Diagnostica | Identificar modelos que no aportan |
