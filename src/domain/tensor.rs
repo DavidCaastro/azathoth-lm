@@ -190,6 +190,134 @@ pub fn q8_mat_vec_mul(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
     Tensor::from_data(out, vec![rows])
 }
 
+// ---- Q4 group-quantized tensor ----
+
+/// Group-quantized 4-bit weight matrix.
+/// Each group of `group_size` elements shares one f32 scale.
+/// Two weights packed per byte (low nibble = even index, high nibble = odd index).
+/// Values stored as signed: mapped from i4 range [-8, 7].
+/// Memory: rows*cols/2 bytes + (rows*cols/group_size)*4 bytes
+pub struct Q4Tensor {
+    pub packed: Vec<u8>,       // two i4 values per byte
+    pub scales: Vec<f32>,      // one scale per group
+    pub rows: usize,
+    pub cols: usize,
+    pub group_size: usize,
+}
+
+impl Q4Tensor {
+    /// Quantize an f32 (rows, cols) tensor to Q4 with group quantization.
+    pub fn from_f32(t: &Tensor, group_size: usize) -> Self {
+        assert_eq!(t.shape.len(), 2);
+        let rows = t.shape[0];
+        let cols = t.shape[1];
+        let total = rows * cols;
+        assert_eq!(total % 2, 0, "Q4 requires even number of elements");
+
+        let n_groups = (total + group_size - 1) / group_size;
+        let mut packed = vec![0u8; total / 2];
+        let mut scales = vec![0.0f32; n_groups];
+
+        for g in 0..n_groups {
+            let start = g * group_size;
+            let end = (start + group_size).min(total);
+            let group = &t.data[start..end];
+
+            let abs_max = group.iter().fold(0.0f32, |acc, &v| acc.max(v.abs()));
+            let scale = if abs_max > 0.0 { abs_max / 7.0 } else { 1.0 };
+            let inv_scale = 1.0 / scale;
+            scales[g] = scale;
+
+            for i in start..end {
+                let q = (t.data[i] * inv_scale).round().clamp(-8.0, 7.0) as i8;
+                let qu = (q & 0x0F) as u8; // keep low 4 bits
+                let byte_idx = i / 2;
+                if i % 2 == 0 {
+                    packed[byte_idx] = (packed[byte_idx] & 0xF0) | qu;
+                } else {
+                    packed[byte_idx] = (packed[byte_idx] & 0x0F) | (qu << 4);
+                }
+            }
+        }
+
+        Self { packed, scales, rows, cols, group_size }
+    }
+
+    /// Memory usage in bytes
+    pub fn mem_bytes(&self) -> usize {
+        self.packed.len() + self.scales.len() * 4
+    }
+
+    /// Dequantize a single element (for debugging)
+    #[allow(dead_code)]
+    fn get(&self, idx: usize) -> f32 {
+        let byte = self.packed[idx / 2];
+        let nibble = if idx % 2 == 0 { byte & 0x0F } else { byte >> 4 };
+        // Sign-extend from 4 bits
+        let val = if nibble & 0x08 != 0 {
+            nibble as i8 | !0x0F_u8 as i8 // sign extend
+        } else {
+            nibble as i8
+        };
+        let group = idx / self.group_size;
+        val as f32 * self.scales[group]
+    }
+}
+
+/// y = Q4_mat @ f32_vec.
+/// Dequantizes weights to i8 per group, quantizes input vec to i8 once,
+/// then accumulates as i32.
+pub fn q4_mat_vec_mul(mat: &Q4Tensor, vec: &Tensor) -> Tensor {
+    assert_eq!(vec.shape.len(), 1);
+    let rows = mat.rows;
+    let cols = mat.cols;
+    assert_eq!(vec.shape[0], cols);
+
+    let v = &vec.as_slice()[..cols];
+
+    // Quantize input vector to i8 (amortized over all rows)
+    let mut v_abs_max = 0.0f32;
+    for &x in v { let a = x.abs(); if a > v_abs_max { v_abs_max = a; } }
+    let v_scale = if v_abs_max > 0.0 { v_abs_max / 127.0 } else { 1.0 };
+    let v_inv = 1.0 / v_scale;
+    let mut v_q = vec![0i8; cols];
+    for c in 0..cols {
+        v_q[c] = (v[c] * v_inv).round().clamp(-127.0, 127.0) as i8;
+    }
+
+    let mut out = vec![0.0f32; rows];
+    let gs = mat.group_size;
+    let groups_per_row = (cols + gs - 1) / gs;
+
+    for r in 0..rows {
+        let row_start = r * cols;
+        let mut row_sum = 0.0f32;
+
+        for g in 0..groups_per_row {
+            let g_start = g * gs;
+            let g_end = (g_start + gs).min(cols);
+            let global_group = (row_start + g_start) / gs;
+            let w_scale = mat.scales[global_group];
+
+            let mut acc = 0i32;
+            for c in g_start..g_end {
+                let idx = row_start + c;
+                let byte = mat.packed[idx / 2];
+                let nibble = if idx % 2 == 0 { byte & 0x0F } else { byte >> 4 };
+                let val = if nibble & 0x08 != 0 {
+                    (nibble | 0xF0) as i8
+                } else {
+                    nibble as i8
+                };
+                acc += val as i32 * v_q[c] as i32;
+            }
+            row_sum += acc as f32 * (w_scale * v_scale);
+        }
+        out[r] = row_sum;
+    }
+    Tensor::from_data(out, vec![rows])
+}
+
 /// Element-wise multiply: a * b (same shape)
 pub fn mul(a: &Tensor, b: &Tensor) -> Tensor {
     assert_eq!(a.numel(), b.numel());
