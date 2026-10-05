@@ -5,3 +5,4 @@ pub mod bias_head;
 pub mod mixer;
 pub mod coder;
 pub mod cm;
+pub mod bridge;

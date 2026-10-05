@@ -17,6 +17,7 @@
 | Phase 1 — Arithmetic coder (10KB) | 1.3320 | Compressed BPB, CE=1.2812, overhead=0.0508 |
 | Phase 1 — CM standalone (100KB) | 2.4078 | 9 bit-level models, logistic mixer, 78 MB |
 | Phase 1 — CM standalone (1MB) | 2.0915 | Beats gzip (2.58), 220K B/s |
+| Phase 1 — Hybrid CM+RWKV bridge (100KB) | **1.2924** | -0.0060 vs baseline, 169 B/s |
 
 100KB "quick" eval. Full enwik8 now feasible: 162 B/s → ~7 days (was ~25 days at 46 B/s).
 
@@ -31,7 +32,8 @@
 1.33  azathoth-lm tuned static (lr=0.30, scale=0.5, 100KB)
 1.32  azathoth-lm mixer f32 (eta=0.01, lr=0.30, scale=0.5, 100KB)
 1.31  azathoth-lm tuned (lr=0.30, scale=0.5, 10KB)
-1.30  azathoth-lm Q8 int-accum (eta=0.01, lr=0.30, scale=0.5, 100KB) ← CURRENT
+1.30  azathoth-lm Q8 int-accum (eta=0.01, lr=0.30, scale=0.5, 100KB)
+1.29  azathoth-lm hybrid CM+RWKV bridge (100KB) ← CURRENT
 1.30  azathoth-lm dynamic lr (surprise-mod tau=2000, 10KB)
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
@@ -86,7 +88,8 @@ Full protocol in `docs/BENCHMARKS.md`. Will measure 11 categories across
 | + ensemble (N-gram + bias) | 1.3758 | 1.4086 | 2026-10-01 |
 | + tuned (lr=0.30, scale=0.5) | 1.3078 | 1.3281 | 2026-10-02 |
 | + mixer (eta=0.01) | 1.3032 | 1.3238 | 2026-10-02 |
-| + Q8 quantization | 1.2797 | **1.2984** | 2026-10-05 |
+| + Q8 quantization | 1.2797 | 1.2984 | 2026-10-05 |
+| + hybrid CM+RWKV bridge | 1.4133 | **1.2924** | 2026-10-05 |
 
 ## Phase 0 Details
 

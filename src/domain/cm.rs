@@ -212,6 +212,17 @@ impl BitMixer {
         }
     }
 
+    /// Resize to accommodate extra external models (keeps existing weights).
+    fn extend_models(&mut self, new_total: usize) {
+        if new_total <= self.n_models {
+            return;
+        }
+        for w in &mut self.weights {
+            w.resize(new_total, 1.0);
+        }
+        self.n_models = new_total;
+    }
+
     /// Mix model predictions into single P(bit=1).
     fn predict(&self, c: u16, model_probs: &[f32]) -> f32 {
         let w = &self.weights[c as usize];
@@ -283,29 +294,54 @@ impl ContextMixer {
 
     /// Process one byte. Returns cost in bits (-log2 of predicted probability).
     pub fn process_byte(&mut self, byte: u8) -> f64 {
+        self.process_byte_inner(byte, None)
+    }
+
+    /// Process one byte with external bit predictions (e.g. from RWKV bridge).
+    /// `external_bit_preds[j]` = P(bit_j=1) from the external model, for j=0..7 (MSB first).
+    /// These are added as an extra input to the mixer alongside the CM order models.
+    pub fn process_byte_with_external(&mut self, byte: u8, external_bit_preds: &[f32; 8]) -> f64 {
+        self.process_byte_inner(byte, Some(external_bit_preds))
+    }
+
+    fn process_byte_inner(&mut self, byte: u8, external: Option<&[f32; 8]>) -> f64 {
+        let n_cm = self.models.len();
+        let total_inputs = if external.is_some() { n_cm + 1 } else { n_cm };
+
+        // Ensure mixer and pred_buf are sized for the total inputs
+        if self.pred_buf.len() < total_inputs {
+            self.pred_buf.resize(total_inputs, 0.5);
+        }
+        self.mixer.extend_models(total_inputs);
+
         let mut total_bits = 0.0f64;
         let mut c: u16 = 1; // PAQ-style bit context: starts at 1
 
         for j in 0..8u8 {
             let bit = (byte >> (7 - j)) & 1;
 
-            // Collect predictions from all models
+            // Collect predictions from CM order models
             for (i, model) in self.models.iter().enumerate() {
                 self.pred_buf[i] =
                     model.predict(&self.history, self.history_len, self.max_history, c);
             }
 
+            // Append external prediction if provided
+            if let Some(ext) = external {
+                self.pred_buf[n_cm] = ext[j as usize].clamp(0.001, 0.999);
+            }
+
             // Mix
-            let prediction = self.mixer.predict(c, &self.pred_buf);
+            let prediction = self.mixer.predict(c, &self.pred_buf[..total_inputs]);
 
             // Cost of this bit
             let p_correct = if bit == 1 { prediction } else { 1.0 - prediction };
             total_bits += -(p_correct as f64).max(1e-15).log2();
 
             // Update mixer
-            self.mixer.update(c, &self.pred_buf, prediction, bit);
+            self.mixer.update(c, &self.pred_buf[..total_inputs], prediction, bit);
 
-            // Update all models
+            // Update all CM models
             for model in &mut self.models {
                 model.update(&self.history, self.history_len, self.max_history, c, bit);
             }

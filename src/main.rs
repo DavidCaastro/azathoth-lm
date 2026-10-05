@@ -10,6 +10,7 @@ use crate::domain::bias_head::BiasHead;
 use crate::domain::mixer::AdaptiveMixer;
 use crate::domain::coder::{Cdf, RangeEncoder, RangeDecoder};
 use crate::domain::cm::ContextMixer;
+use crate::domain::bridge::{ByteBridge, byte_probs_to_bit_preds};
 use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot};
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
@@ -25,6 +26,7 @@ fn main() {
         "compress" => cmd_compress(&args[2..]),
         "decompress" => cmd_decompress(&args[2..]),
         "cm-eval" => cmd_cm_eval(&args[2..]),
+        "hybrid-eval" => cmd_hybrid_eval(&args[2..]),
         "baseline" => cmd_baseline(&args[2..]),
         "rwkv-test" => cmd_rwkv_test(&args[2..]),
         "info" => todo!("Checkpoint info"),
@@ -39,6 +41,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -376,6 +379,140 @@ fn cmd_cm_eval(args: &[String]) {
     eprintln!("  BPB:         {:.4}", final_bpb);
     eprintln!("  time:        {:.1}s ({:.0} B/s)", elapsed, total_bytes as f64 / elapsed);
     eprintln!("  hash memory: {:.1} MB", mem_mb);
+}
+
+fn cmd_hybrid_eval(args: &[String]) {
+    let mut input_path = "data/enwik8".to_string();
+    let mut weights_dir = "weights/rwkv7-0.1b".to_string();
+    let mut max_bytes: usize = 0;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--input" => { i += 1; input_path = args[i].clone(); }
+            "--weights" => { i += 1; weights_dir = args[i].clone(); }
+            "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    // Load input
+    let raw_bytes = std::fs::read(&input_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {}", input_path, e));
+    let total_bytes = if max_bytes > 0 { max_bytes.min(raw_bytes.len()) } else { raw_bytes.len() };
+    let input_slice = &raw_bytes[..total_bytes];
+    eprintln!("[hybrid] input: {} ({} bytes)", input_path, total_bytes);
+
+    // Load tokenizer and model
+    let model_path = Path::new(&weights_dir).join("model.safetensors");
+    let vocab_path = Path::new(&weights_dir).join("rwkv_vocab_v20230424.txt");
+    let tokenizer = WorldTokenizer::load(&vocab_path);
+    let config = Rwkv7Config::from_weights_dir(&weights_dir);
+    let model = Rwkv7Model::load(&model_path, config);
+    let v = model.config.vocab_size;
+
+    // Tokenize
+    let tokens = tokenizer.encode(input_slice);
+    eprintln!("[hybrid] tokenized: {} tokens ({:.2} bytes/token)",
+              tokens.len(), total_bytes as f64 / tokens.len() as f64);
+
+    // Build token → byte sequence mapping
+    let mut token_bytes_map: Vec<Vec<u8>> = Vec::with_capacity(tokens.len());
+    for &tok in &tokens {
+        token_bytes_map.push(tokenizer.decode_token(tok).to_vec());
+    }
+
+    // Initialize components
+    let mut cm = ContextMixer::new();
+    let mut bridge = ByteBridge::new(&tokenizer);
+    let cm_mem_mb = cm.memory_bytes() as f64 / (1024.0 * 1024.0);
+    eprintln!("[hybrid] CM: 9 orders, {:.1} MB | bridge trie: {} nodes",
+              cm_mem_mb, bridge.node_count());
+
+    let mut state = Rwkv7State::new(&model.config);
+    let mut scratch = model.create_scratch();
+    let mut logits = vec![0.0f32; v];
+
+    let mut total_bits_hybrid = 0.0f64;
+    let mut byte_count = 0usize;
+
+    eprintln!("[hybrid] evaluating ...");
+    eprintln!();
+
+    let t_start = std::time::Instant::now();
+    let report_interval = (total_bytes / 4).max(1000);
+
+    for t in 0..tokens.len() {
+        let tok = tokens[t] as usize;
+        let tok_bytes = &token_bytes_map[t];
+
+        // For tokens after the first, we have RWKV logits from previous step
+        let have_rwkv = t > 0;
+
+        if have_rwkv {
+            // Compute softmax over RWKV logits
+            let tensor = crate::domain::tensor::Tensor::from_data(
+                logits.clone(), vec![v],
+            );
+            let probs = softmax(&tensor);
+
+            // Feed token probs into bridge for byte marginalization
+            bridge.set_token_probs(&probs.data, &tokenizer);
+            bridge.reset();
+        }
+
+        // Process each byte of this token
+        for &byte in tok_bytes {
+            if have_rwkv {
+                // Get byte-level probs from bridge, decompose to bit predictions
+                let byte_probs = bridge.byte_probs();
+                let rwkv_bit_preds = byte_probs_to_bit_preds(&byte_probs, byte);
+
+                // Hybrid: CM + RWKV bridge predictions
+                let bits = cm.process_byte_with_external(byte, &rwkv_bit_preds);
+                total_bits_hybrid += bits;
+
+                // Advance bridge position within the token
+                bridge.advance_byte(byte);
+            } else {
+                // First token: CM only (no RWKV context yet)
+                let bits = cm.process_byte(byte);
+                total_bits_hybrid += bits;
+            }
+
+            byte_count += 1;
+
+            // Progress report
+            if byte_count % report_interval == 0 || byte_count == total_bytes {
+                let elapsed = t_start.elapsed().as_secs_f64();
+                let bpb = total_bits_hybrid / byte_count as f64;
+                let bps = byte_count as f64 / elapsed;
+                eprint!("\r[hybrid] {:.1}% | {}/{} bytes | {:.4} BPB | {:.0} B/s   ",
+                        100.0 * byte_count as f64 / total_bytes as f64,
+                        byte_count, total_bytes, bpb, bps);
+            }
+        }
+
+        // Run RWKV forward pass (updates state for next token)
+        model.forward_into(tok, &mut state, &mut scratch, &mut logits);
+    }
+
+    let elapsed = t_start.elapsed().as_secs_f64();
+    let hybrid_bpb = total_bits_hybrid / byte_count as f64;
+
+    eprintln!();
+    eprintln!();
+    eprintln!("[hybrid] results:");
+    eprintln!("  input:       {} bytes ({} tokens)", byte_count, tokens.len());
+    eprintln!("  hybrid BPB:  {:.4} (CM + RWKV bridge)", hybrid_bpb);
+    eprintln!("  time:        {:.1}s ({:.0} B/s)", elapsed, byte_count as f64 / elapsed);
+    eprintln!("  CM memory:   {:.1} MB", cm_mem_mb);
+    eprintln!();
+    eprintln!("[hybrid] reference points:");
+    eprintln!("  CM standalone (100KB):   2.41 BPB");
+    eprintln!("  RWKV ensemble (100KB):   1.30 BPB");
+    eprintln!("  target:                  < 1.0 BPB");
 }
 
 fn cmd_baseline(args: &[String]) {
