@@ -285,21 +285,31 @@ Incremental improvement over fixed quantization.
 Sources: RWKVQuant (ICML 2025), TernaryLLM (arXiv 2024), Spectra (ICLR 2025),
 ParetoQ (Meta 2025), rwkv.cpp #12, Nacrith, Low-Bit Quant Scaling Laws (ACL 2025)
 
+### ~~Block-32 Q8~~ KILLED (empirically tested)
+
+Block-32 Q8 was implemented and benchmarked. Results WORSE than per-row Q8:
+
+| Metric | Per-row Q8 | Block-32 Q8 | Delta |
+|--------|-----------|-------------|-------|
+| BPB 10KB | 1.2797 | 1.3163 | **+0.0366 worse** |
+| BPB 100KB | 1.2984 | 1.3362 | **+0.0378 worse** |
+| Speed | 117 B/s | 77 B/s | **-34% slower** |
+
+**Why it fails for RWKV (contradicting transformer results):**
+- RWKV has "more uniform weights" than LLaMA (RWKVQuant, ICML 2025)
+- 60% of RWKV layers suit scalar quantization vs only 10% in LLaMA
+- Per-row Q8 already near-optimal for RWKV's uniform distributions
+- Coarser per-row quantization acts as implicit regularization (documented)
+- Block-32 breaks the single tight i32 accumulation loop into 24 f32 partial sums,
+  adding both arithmetic overhead and pipeline stalls
+- The research finding (block-32 helps on 145M transformer) does NOT transfer to RWKV
+
+**Lesson: architecture-specific validation is mandatory before adopting ecosystem defaults.**
+llama.cpp's block-32 is optimized for transformers, not linear-attention SSMs.
+
 ### Tier 1 -- High Impact (validated, no retraining needed)
 
-1. **Block-32 Q8 quantization** (MXINT8-style):
-   Change Q8 from per-row scale (1 scale per 768 elements) to per-32-element scale.
-   - llama.cpp uses block-32 universally across ALL GGUF types — battle-tested
-   - Direct measurement on 145M model: training loss 3.1251 (block-32) vs 3.2560
-     (per-row) — 0.1309 improvement at INT8 (arXiv 2510.25602)
-   - Crest factor reduction: ~12 (per-row) → ~2.96 (block-32) — outliers handled
-   - Speed penalty: ~3% arithmetic overhead (1 fp32 mul per 32 int MACs)
-   - SIMD-aligned: 32 bytes = 256 bits = AVX2 register width
-   - We already have the code pattern: Q4Tensor uses group_size=64
-   - Memory overhead: 48 bytes scales per 768-byte row (6.25%) — negligible
-   - Use f16 scales like llama.cpp to minimize overhead
-
-2. **AVX-VNNI intrinsics (VPDPBUSD)**:
+1. **AVX-VNNI intrinsics (VPDPBUSD)**:
    Our Q8 matmul auto-vectorizes but doesn't use VNNI explicitly. VNNI fuses
    4x(u8*i8)+i32 in a single instruction. Our i5-1235U has AVX-VNNI.
    - Documented in r03 as "Tier 2" but never implemented

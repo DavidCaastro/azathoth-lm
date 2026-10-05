@@ -94,6 +94,11 @@ pub fn mat_vec_mul(mat: &Tensor, vec: &Tensor) -> Tensor {
 /// Row-quantized int8 weight matrix.
 /// Each row has one f32 scale factor: weight[r][c] ≈ q_data[r*cols+c] * scale[r]
 /// Memory: rows*cols bytes + rows*4 bytes ≈ rows*cols + 0.5% overhead
+///
+/// Note: block-32 (llama.cpp Q8_0 style) was tested and found WORSE for RWKV-7:
+/// +0.0378 BPB and -34% speed on 100KB. RWKV has uniform weight distributions
+/// (RWKVQuant, ICML 2025) so per-row scaling is already near-optimal, and the
+/// coarser quantization acts as beneficial implicit regularization. See R14.
 pub struct Q8Tensor {
     pub q_data: Vec<i8>,
     pub scales: Vec<f32>,

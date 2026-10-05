@@ -211,11 +211,12 @@ Verification phase (5 targeted threads, 40+ additional searches) **killed ternar
 PTQ ternary on 0.1B = catastrophic collapse (PPL >4000). QAT requires retraining.
 RWKV SSM recurrence propagates quant noise. No neural compressor uses <Q8.
 
-**Real winner: Block-32 Q8 + AVX-VNNI + buffer reuse** (address actual bottleneck).
+Block-32 Q8 tested and KILLED (+0.0378 BPB, -34% speed on RWKV).
+**Real path: AVX-VNNI + buffer reuse + per-row Q8** (address actual bottleneck).
 
 | System | Verdict | Reason |
 |---|---|---|
-| **Block-32 Q8** | **WINNER** | llama.cpp standard, -0.13 loss vs per-row, ~3% overhead |
+| Block-32 Q8 | **KILLED** | +0.0378 BPB, -34% speed on RWKV (uniform weights) |
 | AVX-VNNI intrinsics | High priority | Untapped hardware capability, est. 1.5-2x matmul |
 | Buffer reuse | High priority | 370 allocs/token pollute cache, 13% bandwidth util |
 | ANS | Adopt for coder | Industry-standard entropy coding |
