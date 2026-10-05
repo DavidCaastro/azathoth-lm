@@ -41,7 +41,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--lstm-hidden N] [--lstm-lr F]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -385,7 +385,10 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut input_path = "data/enwik8".to_string();
     let mut weights_dir = "weights/rwkv7-0.1b".to_string();
     let mut max_bytes: usize = 0;
-    let mut skip_threshold: f32 = 0.0; // 0 = no skip
+    let mut skip_threshold: f32 = 0.0;
+    let mut use_lstm = false;
+    let mut lstm_hidden: usize = 128;
+    let mut lstm_lr: f32 = 0.002;
 
     let mut i = 0;
     while i < args.len() {
@@ -394,6 +397,9 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--weights" => { i += 1; weights_dir = args[i].clone(); }
             "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
             "--skip" => { i += 1; skip_threshold = args[i].parse().unwrap(); }
+            "--lstm" => { use_lstm = true; }
+            "--lstm-hidden" => { i += 1; lstm_hidden = args[i].parse().unwrap(); use_lstm = true; }
+            "--lstm-lr" => { i += 1; lstm_lr = args[i].parse().unwrap(); use_lstm = true; }
             _ => {}
         }
         i += 1;
@@ -426,11 +432,22 @@ fn cmd_hybrid_eval(args: &[String]) {
     }
 
     // Initialize components
-    let mut cm = ContextMixer::new();
+    let mut cm = if use_lstm {
+        eprintln!("[hybrid] LSTM mixer: hidden={}, lr={}", lstm_hidden, lstm_lr);
+        ContextMixer::new_with_lstm(lstm_hidden, lstm_lr)
+    } else {
+        ContextMixer::new()
+    };
     let mut bridge = ByteBridge::new(&tokenizer);
     let cm_mem_mb = cm.memory_bytes() as f64 / (1024.0 * 1024.0);
-    eprintln!("[hybrid] CM: 9 orders, {:.1} MB | bridge trie: {} nodes",
-              cm_mem_mb, bridge.node_count());
+    let mixer_params = cm.mixer_param_count();
+    let mixer_str = if use_lstm {
+        format!("LSTM(H={},lr={}, {}params)", lstm_hidden, lstm_lr, mixer_params)
+    } else {
+        "logistic".to_string()
+    };
+    eprintln!("[hybrid] CM: 9 orders, {:.1} MB | mixer: {} | trie: {} nodes",
+              cm_mem_mb, mixer_str, bridge.node_count());
 
     let mut state = Rwkv7State::new(&model.config);
     let mut scratch = model.create_scratch();

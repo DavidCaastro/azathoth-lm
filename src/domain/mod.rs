@@ -6,3 +6,4 @@ pub mod mixer;
 pub mod coder;
 pub mod cm;
 pub mod bridge;
+pub mod lstm_mixer;

@@ -2,18 +2,23 @@
 //!
 //! Predicts each byte as 8 bits (MSB first). Multiple hash-table
 //! models of different context orders provide bit predictions,
-//! combined via logistic mixing with online gradient descent.
+//! combined via logistic or LSTM mixing with online gradient descent.
 //!
 //! Architecture follows PAQ8px/cmix: bit-level context models with
-//! 4-way associative hash tables, recency decay, and per-bit-context
-//! mixer weights (256 independent weight vectors).
+//! 4-way associative hash tables, recency decay.
+//!
+//! Mixer options:
+//!   - Logistic: per-bit-context weights (256 independent vectors)
+//!   - LSTM: temporal state captures cross-model dependency patterns
 //!
 //! Heritage validated:
 //!   - Bit-level > byte-level (1.58 vs 1.645 BPB)
 //!   - Logistic mixing >> linear blend (1.89 vs 2.73 BPB)
+//!   - LSTM mixing >> logistic (+0.22 BPB in analytic-lm)
 //!   - Recency decay=0.90 (+0.054 BPB)
 //!   - 4-way associative hash (+0.008 BPB)
-//!   - Mixer context diversity > model count
+
+use crate::domain::lstm_mixer::LstmBitMixer;
 
 /// Stretch probability to logit space: log(p / (1-p))
 #[inline]
@@ -243,28 +248,33 @@ impl BitMixer {
     }
 }
 
+// --- Mixer dispatch ---
+
+enum MixerKind {
+    Logistic(BitMixer),
+    Lstm(LstmBitMixer),
+}
+
 // --- Public API: ContextMixer ---
 
 /// Byte-level context mixing predictor.
 ///
 /// Processes raw bytes, predicting each as 8 bits (MSB first).
 /// Combines predictions from 9 hash-table models (orders 0-8)
-/// via per-bit-context logistic mixing.
+/// via logistic or LSTM mixing.
 pub struct ContextMixer {
     models: Vec<OrderModel>,
-    mixer: BitMixer,
+    mixer: MixerKind,
     history: Vec<u8>,
     max_history: usize,
     history_len: usize,
-    pred_buf: Vec<f32>, // reused per-bit to avoid allocs
+    pred_buf: Vec<f32>,
 }
 
 impl ContextMixer {
-    /// Create a new context mixer with default configuration.
-    /// Orders 0-8, 4-way associative hash, decay=0.90, mixer lr=0.05.
-    pub fn new() -> Self {
+    fn build_models() -> Vec<OrderModel> {
         let decay = 0.90;
-        let models = vec![
+        vec![
             OrderModel::new(0,  8, decay), //    256 buckets —   6 KB
             OrderModel::new(1, 16, decay), //  64 Ki buckets — 1.5 MB
             OrderModel::new(2, 18, decay), // 256 Ki buckets —   6 MB
@@ -274,12 +284,32 @@ impl ContextMixer {
             OrderModel::new(6, 18, decay), // 256 Ki buckets —   6 MB
             OrderModel::new(7, 17, decay), // 128 Ki buckets —   3 MB
             OrderModel::new(8, 16, decay), //  64 Ki buckets — 1.5 MB
-        ];
+        ]
+    }
+
+    /// Create with logistic mixer (per-bit-context weights).
+    pub fn new() -> Self {
+        let models = Self::build_models();
         let n_models = models.len();
-        let max_history = 8; // must be >= max order
+        let max_history = 8;
         Self {
             models,
-            mixer: BitMixer::new(n_models, 0.05),
+            mixer: MixerKind::Logistic(BitMixer::new(n_models, 0.05)),
+            history: Vec::with_capacity(max_history),
+            max_history,
+            history_len: 0,
+            pred_buf: vec![0.0f32; n_models],
+        }
+    }
+
+    /// Create with LSTM mixer (temporal state, dynamic weights).
+    pub fn new_with_lstm(hidden_dim: usize, lr: f32) -> Self {
+        let models = Self::build_models();
+        let n_models = models.len();
+        let max_history = 8;
+        Self {
+            models,
+            mixer: MixerKind::Lstm(LstmBitMixer::new(n_models, hidden_dim, lr)),
             history: Vec::with_capacity(max_history),
             max_history,
             history_len: 0,
@@ -290,6 +320,14 @@ impl ContextMixer {
     /// Total memory used by hash tables (bytes).
     pub fn memory_bytes(&self) -> usize {
         self.models.iter().map(|m| m.memory_bytes()).sum()
+    }
+
+    /// Number of mixer parameters (0 for logistic, >0 for LSTM).
+    pub fn mixer_param_count(&self) -> usize {
+        match &self.mixer {
+            MixerKind::Logistic(_) => 0,
+            MixerKind::Lstm(m) => m.param_count(),
+        }
     }
 
     /// Process one byte. Returns cost in bits (-log2 of predicted probability).
@@ -328,14 +366,17 @@ impl ContextMixer {
         let n_cm = self.models.len();
         let total_inputs = if external.is_some() { n_cm + 1 } else { n_cm };
 
-        // Ensure mixer and pred_buf are sized for the total inputs
+        // Ensure pred_buf is sized for total inputs
         if self.pred_buf.len() < total_inputs {
             self.pred_buf.resize(total_inputs, 0.5);
         }
-        self.mixer.extend_models(total_inputs);
+        match &mut self.mixer {
+            MixerKind::Logistic(m) => m.extend_models(total_inputs),
+            MixerKind::Lstm(m) => m.extend_models(total_inputs),
+        }
 
         let mut total_bits = 0.0f64;
-        let mut c: u16 = 1; // PAQ-style bit context: starts at 1
+        let mut c: u16 = 1;
 
         for j in 0..8u8 {
             let bit = (byte >> (7 - j)) & 1;
@@ -351,26 +392,29 @@ impl ContextMixer {
                 self.pred_buf[n_cm] = ext[j as usize].clamp(0.001, 0.999);
             }
 
-            // Mix
-            let prediction = self.mixer.predict(c, &self.pred_buf[..total_inputs]);
+            // Mix and update (dispatch by mixer type)
+            // Borrow split: mixer borrows separately from pred_buf
+            let prediction = match &mut self.mixer {
+                MixerKind::Logistic(m) => m.predict(c, &self.pred_buf[..total_inputs]),
+                MixerKind::Lstm(m) => m.predict(&self.pred_buf[..total_inputs]),
+            };
 
-            // Cost of this bit
             let p_correct = if bit == 1 { prediction } else { 1.0 - prediction };
             total_bits += -(p_correct as f64).max(1e-15).log2();
 
-            // Update mixer
-            self.mixer.update(c, &self.pred_buf[..total_inputs], prediction, bit);
+            match &mut self.mixer {
+                MixerKind::Logistic(m) => m.update(c, &self.pred_buf[..total_inputs], prediction, bit),
+                MixerKind::Lstm(m) => m.update(&self.pred_buf[..total_inputs], prediction, bit),
+            }
 
             // Update all CM models
             for model in &mut self.models {
                 model.update(&self.history, self.history_len, self.max_history, c, bit);
             }
 
-            // Advance bit context
             c = (c << 1) | bit as u16;
         }
 
-        // Add byte to ring buffer history
         if self.history.len() < self.max_history {
             self.history.push(byte);
         } else {
