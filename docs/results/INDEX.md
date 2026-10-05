@@ -36,9 +36,10 @@
 1.07  SHA-RNN     (63M params)
 0.97  fx2-cmix    (6M Transformer + 2000+ CM)
 0.94  Nacrith     (135M SmolLM2 + CM)
-~1.25 ← PROJECTED azathoth-lm (0.1B + tuned ensemble + skip)
+~1.16 ← PROJECTED azathoth-lm (0.1B + byte CM + bridge + confidence skip)
+~0.93 ← PROJECTED azathoth-lm (+ LSTM mixer, optimistic)
 ~0.95 ← KILLED: G1k 1.5B = 5.27 BPB (domain mismatch)
-<1.0  ← OUR TARGET (requires domain-matched checkpoint)
+<1.0  ← OUR TARGET (requires byte-level CM + LSTM mixer)
 ```
 
 ## Benchmark Dashboard
@@ -254,7 +255,7 @@ Key insights:
 
 ## Roadmap
 
-Prioritized next actions in `docs/ROADMAP.md`. Key phases:
-1. **Phase 1**: CDF-24, N-gram 5-6, confidence skip, full enwik8
-2. **Phase 2**: Context mixing models, LSTM mixer, byte-level path
-3. **Phase 3**: Domain-matched checkpoint, SA-PPM, hierarchical mixer
+Universal compressor design. Prioritized actions in `docs/ROADMAP.md`:
+1. **Phase 1 — Universal Core**: Arithmetic coder, byte-level CM, RWKV→byte bridge, confidence skip
+2. **Phase 2 — Advanced Mixing**: LSTM mixer, hierarchical groups, multi-corpus validation
+3. **Phase 3 — Frontier**: SA-PPM, domain-matched checkpoint (opt-in)

@@ -1,196 +1,242 @@
 # Roadmap — azathoth-lm
 
-**Date**: 2026-10-02
-**Baseline**: 1.3238 BPB (100KB enwik8, mixer eta=0.01, lr=0.30, scale=0.5)
-**Target**: < 1.0 BPB on enwik8
+**Date**: 2026-10-05
+**Baseline**: 1.2984 BPB (100KB enwik8), 162 B/s (Q8 + VNNI + scratch arena)
+**Target**: < 1.0 BPB — universal compressor, measured on enwik8
+
+## Design Philosophy
+
+azathoth-lm is a **universal data compressor**, not an enwik8 optimizer.
+enwik8 is the primary benchmark because the literature uses it, but every
+architectural decision must work on arbitrary byte streams: text, binaries,
+images, audio, genomic data, mixed formats.
+
+The systems that achieve sub-1.0 BPB (cmix, PAQ8px, fx2-cmix, Nacrith) are
+all universal compressors. They operate at byte/bit level. Their enwik8
+numbers are a consequence of being good at compressing *anything*.
+
+Principles:
+- **Byte/bit-level first**: all context models operate on raw bytes, not tokens
+- **Data-agnostic**: no assumptions about input format or language
+- **Neural + statistical**: RWKV for generalization, CM for exact pattern matching
+- **Online adaptation**: all non-neural components learn during inference
+- **Multi-corpus validation**: measure on enwik8 + at least one non-text corpus
 
 ## Current Position
 
 ```
-1.32  azathoth-lm   (0.1B RWKV + N-gram + bias + mixer, 100KB eval)
-1.27  PAQ8px        (200+ context models)
+1.30  azathoth-lm   (0.1B RWKV + token N-gram + bias + mixer, 162 B/s)
+1.27  PAQ8px        (200+ byte-level CM, universal)
 1.19  NNCP v3       (199M Transformer-XL)
-1.17  cmix          (2077 models + LSTM)
+1.17  cmix          (2077 byte-level models + LSTM mixer, universal)
 1.11  ts_zip        (RWKV-169M v4 Q8, pure LM)
-0.97  fx2-cmix      (6M Transformer + 2000+ CM)
-0.94  Nacrith       (135M SmolLM2 + CM)
+0.97  fx2-cmix      (6M Transformer + 2000+ CM, universal)
+0.94  Nacrith       (135M SmolLM2 + byte-level CM, universal)
 ```
 
-Gap to target: ~0.33 BPB. Gap to PAQ8px: ~0.05 BPB.
+Gap to target: ~0.30 BPB. Gap to PAQ8px: ~0.03 BPB.
 
-## Phase 1 — Maximize Current Architecture
+### What we have vs what we need
 
-Priority: extract remaining BPB from 0.1B RWKV + ensemble without new components.
+| Component | azathoth-lm | PAQ8px/cmix/Nacrith |
+|---|---|---|
+| Neural predictor | RWKV-7 0.1B (token-level) | Transformer/LM (byte-level bridge) |
+| Context models | 2 (token N-gram + bias head) | 50-2000+ (byte/bit-level) |
+| Mixer | Logistic additive + AdaptiveMixer | LSTM / logistic multi-layer |
+| Entropy coder | Cross-entropy measurement only | Full arithmetic coder |
+| Operating level | Token (65K vocab) | Byte/bit |
+| Adaptation | Online SGD on 2 components | Online SGD on all components |
 
-### P1.1: CDF-24 Arithmetic Coder
+The biggest gap is not tuning — it's **missing architecture**: byte-level CM
+and an entropy coder. These are the two halves that make a compressor universal.
 
-- **Impact**: est. -0.05 to -0.10 BPB (eliminates quantization loss in probability → bits)
-- **Effort**: Medium (arithmetic coder implementation in Rust)
-- **Risk**: Low — well-understood algorithm, no model changes
-- **Rationale**: Current BPB is measured via cross-entropy on softmax output.
-  Real compression requires mapping probabilities to bit streams via arithmetic coding.
-  CDF-24 (24-bit precision) is standard in PAQ8px/cmix. The gap between cross-entropy
-  BPB and actual compressed BPB can be 0.05-0.10 depending on tail distribution handling.
-- **Heritage**: No prior attempt in analytic-lm or edge-lm. Clean implementation.
-- **Kill criteria**: If compressed BPB > cross-entropy BPB + 0.01, implementation is buggy.
+## Phase 1 — Universal Compressor Core
 
-### P1.2: N-gram Order Expansion (5-6)
+Priority: build the missing infrastructure that makes azathoth-lm a real
+compressor, not just a cross-entropy measurer.
 
-- **Impact**: est. -0.01 to -0.03 BPB
-- **Effort**: Low (extend existing TokenNgram, increase hash table)
-- **Risk**: Low — RAM cost ~2x per order, but well within 32 GB budget
-- **Rationale**: Current orders 1-4 capture short patterns. Orders 5-6 would capture
-  common multi-word phrases in enwik8 (article titles, template text, dates).
-  N-gram weight is already the dominant mixer component (w_ng=1.85), suggesting
-  the N-gram signal is valuable and more of it may help.
-- **Heritage**: analytic-lm used match tables up to order 8 as separate components.
-- **Kill criteria**: If BPB unchanged on 100KB with orders 5-6 added, revert.
+### P1.1: Arithmetic Coder (CDF-24)
 
-### P1.3: Full enwik8 Benchmark (100MB)
+- **Impact**: est. -0.05 to -0.10 BPB (closes probability→bits gap)
+- **Effort**: Medium
+- **Risk**: Low — well-understood algorithm, standard in all top compressors
+- **Rationale**: Without an arithmetic coder, we don't compress — we measure.
+  The gap between cross-entropy BPB and actual compressed BPB is 0.05-0.10
+  depending on tail handling. CDF-24 (24-bit precision) is the industry standard.
+  This is domain-agnostic: works on any byte stream.
+- **Heritage**: No prior attempt. Clean implementation.
+- **Kill criteria**: If compressed BPB > cross-entropy BPB + 0.01, bug in coder.
 
-- **Impact**: Official BPB number for comparison with literature
-- **Effort**: High wall-clock time (~327h at 85 B/s current throughput)
-- **Risk**: None to BPB — but blocks machine for ~2 weeks
-- **Rationale**: 100KB eval is a proxy. All published numbers use full enwik8.
-  Must run at least once for credible comparison. Can run after P1.4 for speed.
-- **Dependencies**: Ideally after P1.4 (confidence skip) to reduce wall time.
-- **Mixer eta for 100MB**: est. ~0.001 based on scaling law eta ~ O(1/sqrt(N_tokens)).
-  With ~25M tokens: eta = 0.01 * sqrt(25K/25M) = 0.0003. Sweep [0.0001, 0.0003, 0.001].
+### P1.2: Byte-level Context Mixing Infrastructure
+
+- **Impact**: est. -0.05 to -0.15 BPB (the missing architectural half)
+- **Effort**: High
+- **Risk**: Medium — hash table memory, collision management
+- **Rationale**: This is the single biggest architectural gap. Every sub-1.0
+  system has byte-level context models. Our current token-level N-gram only
+  works for text with the World tokenizer. Byte-level CM works on anything.
+
+  Core components to port from analytic-lm heritage:
+  1. **Byte-level match models** (orders 1-8): hash tables keyed by recent
+     byte context, predict next byte distribution. Work on any data.
+  2. **Bit-level decomposition**: predict 8 bits per byte (MSB first).
+     heritage.md confirms bit-level > byte-level (1.58 vs 1.645 BPB).
+  3. **Recency-weighted hash tables**: 4-way associative, decay=0.90.
+  4. **Logistic mixing**: stretch predictions to logit space, mix additively.
+
+  These operate in parallel with RWKV. RWKV predicts at token granularity;
+  CM predicts at byte/bit granularity. A bridge layer converts RWKV token
+  logits to byte-level probabilities for mixing.
+- **Heritage**: analytic-lm achieved 1.58 BPB with 54 CM + LSTM on enwik8.
+  Top ~20 models by contribution are the porting target. Diminishing returns
+  after ~50 models.
+- **Kill criteria**: If 10 byte-level CM models add < 0.01 BPB on 100KB, stop.
+
+### P1.3: RWKV-to-Byte Bridge
+
+- **Impact**: Enables mixing neural (token) + statistical (byte) predictions
+- **Effort**: Medium
+- **Risk**: Low-Medium — token/byte alignment is the main complexity
+- **Rationale**: RWKV outputs token-level logits (65K vocab). CM operates at
+  byte/bit level. To mix them, we need a bridge that converts RWKV's token
+  probability distribution into a byte-level prediction.
+
+  Approach: for each byte position, marginalize over all tokens that could
+  emit that byte at that position. Cache the token→byte mapping at load time.
+  This is data-agnostic (World tokenizer covers all byte values).
+- **Heritage**: Nacrith does this (SmolLM2 token logits → byte mixer).
+- **Kill criteria**: If bridge latency > 5ms/byte, too slow.
 
 ### P1.4: Confidence Skip
 
-- **Impact**: 2-5x throughput improvement, est. ~0 BPB loss
-- **Effort**: Medium (threshold tuning, skip logic in main loop)
-- **Risk**: Medium — aggressive skipping degrades BPB
-- **Rationale**: When RWKV prediction confidence is very high (top-1 prob > threshold),
-  the N-gram and bias head corrections are negligible. Skipping ensemble computation
-  for high-confidence tokens saves ~46 ms/tok overhead for those tokens.
-  At 85 B/s, full enwik8 takes ~327h. At 2x, ~164h. At 5x, ~65h.
-- **Heritage**: Listed in heritage.md Tier 2 as untried. No known failure mode.
-- **Kill criteria**: If BPB increases > 0.005 at any skip threshold, too aggressive.
+- **Impact**: 2-5x throughput, est. ~0 BPB loss
+- **Effort**: Medium
+- **Risk**: Medium — aggressive thresholds degrade BPB
+- **Rationale**: When RWKV confidence is very high (top-1 prob > threshold),
+  CM corrections are negligible. Skip ensemble computation for those tokens.
+  Universal optimization — works regardless of data type.
+- **Heritage**: Listed in heritage.md Tier 2 as untried. No known failure.
+- **Kill criteria**: If BPB increases > 0.005 at any threshold, too aggressive.
 
-## Phase 2 — New Components
+## Phase 2 — Advanced Mixing
 
-Priority: add new prediction sources to the ensemble.
+Priority: replace linear mixing with temporal mixing that captures
+cross-model dependencies.
 
-### P2.1: Context Mixing Models (hash-based)
-
-- **Impact**: est. -0.05 to -0.15 BPB (based on PAQ8px architecture)
-- **Effort**: High (implement CM infrastructure from analytic-lm)
-- **Risk**: Medium — hash table memory pressure, collision management
-- **Rationale**: The biggest architectural gap vs PAQ8px/cmix/Nacrith is the number
-  of context models. We have 2 (N-gram + bias head). PAQ8px has 200+. cmix has 2077.
-  Even Nacrith has multiple secondary models beyond the LLM.
-  heritage.md confirms: multi-order match tables (orders 2-8), recency decay=0.90,
-  4-way associative hash all work. Diminishing returns after ~50 models.
-- **Heritage**: analytic-lm achieved 1.58 BPB with 54 CM + LSTM. Porting the best
-  subset (top ~20 by contribution) could yield significant gains.
-- **Kill criteria**: If 10 CM models add < 0.01 BPB improvement, architecture ceiling.
-
-### P2.2: LSTM Mixer
+### P2.1: LSTM Mixer
 
 - **Impact**: est. -0.05 to -0.22 BPB (analytic-lm's biggest single win)
-- **Effort**: High (LSTM implementation, BPTT, gradient management)
-- **Risk**: Medium — BPTT>1 during eval is known to overfit (heritage.md)
-- **Rationale**: heritage.md documents LSTM mixing as +0.22 BPB over linear mixers.
-  This is the largest known architectural win. Current logistic additive mixing is
-  equivalent to a 1-layer linear mixer. An LSTM can capture temporal dependencies
-  between component contributions.
-- **Heritage**: BPTT>1 during eval = +0.10 BPB (FAIL). Must use BPTT=1 during eval.
-  HID=128+ recommended. SGD > Adam for online single-sample.
-- **Dependencies**: Benefits most with multiple CM models (P2.1) to mix.
-- **Kill criteria**: If LSTM mixer BPB > logistic mixer BPB on 100KB, architecture mismatch.
+- **Effort**: High
+- **Risk**: Medium — BPTT>1 during eval overfits (heritage.md)
+- **Rationale**: heritage.md documents LSTM mixing as +0.22 BPB over linear.
+  This is the largest known architectural win. An LSTM can capture temporal
+  patterns in how models' relative accuracy shifts over the byte stream.
+  Benefits most with multiple CM models (P1.2) to mix.
+- **Heritage**: BPTT>1 during eval = FAIL. Use BPTT=1. HID=128+. SGD > Adam.
+- **Kill criteria**: If LSTM mixer BPB > current mixer BPB on 100KB, stop.
 
-### P2.3: Byte-level Prediction Path
-
-- **Impact**: est. -0.02 to -0.05 BPB
-- **Effort**: Medium (parallel byte-level predictions alongside token-level)
-- **Risk**: Low-Medium — token/byte alignment complexity
-- **Rationale**: Current architecture is purely token-level. heritage.md shows
-  bit-level > byte-level (1.58 vs 1.645 BPB). A byte-level prediction path
-  could capture sub-token patterns (XML tags, numbers, punctuation) that
-  the World tokenizer handles poorly.
-- **Heritage**: analytic-lm was byte-level (bit-level). The token-level shift
-  was driven by RWKV's tokenizer. A hybrid could get both benefits.
-
-## Phase 3 — Advanced Techniques
-
-Priority: techniques with higher complexity but potentially large gains.
-
-### P3.1: Domain-Matched Neural Checkpoint
-
-- **Impact**: est. -0.10 to -0.20 BPB
-- **Effort**: Very High (fine-tuning infrastructure, GPU access needed)
-- **Risk**: High — requires GPU access we don't have locally
-- **Rationale**: R05 showed all available RWKV-7 checkpoints >0.1B perform worse
-  on enwik8 due to domain mismatch. A checkpoint fine-tuned on Wikipedia/enwik8
-  data would dramatically improve base model predictions. ts_zip achieves 1.11 BPB
-  with RWKV-169M trained on English text.
-- **Options**: Fine-tune 0.1B on enwik8 subset (if GPU available), or find/request
-  an English-domain RWKV-7 checkpoint from the community.
-- **Kill criteria**: If fine-tuned 0.1B < 1.20 BPB standalone, massive win. If > 1.40, insufficient.
-
-### P3.2: SA-PPM / Suffix Array Predictor
-
-- **Impact**: est. -0.30 to -0.60 BPB (heritage.md Tier 1)
-- **Effort**: Very High (suffix array construction, PPM integration)
-- **Risk**: High — memory cost, O(n) construction, enwik8 = 100MB suffix array
-- **Rationale**: Unifies all context-matching into a single optimal structure.
-  PPM alone achieves ~1.50 BPB on enwik8. Combined with neural predictions,
-  could be the single largest win available.
-- **Heritage**: Listed as Tier 1 in heritage.md, never attempted. est. -0.30 to -0.60.
-- **Dependencies**: RAM budget — 100MB enwik8 suffix array needs ~400-800 MB.
-
-### P3.3: Hierarchical/Multi-Stage Mixer
+### P2.2: Hierarchical Model Groups
 
 - **Impact**: est. -0.02 to -0.05 BPB
 - **Effort**: Medium-High
 - **Risk**: Medium — SSE overcorrection documented in heritage.md
-- **Rationale**: Group models by type (exact match, neural, statistical) and
-  mix within groups before final mixing. Reduces interaction noise.
-- **Heritage**: Cascaded SSE always overcorrects. Hierarchical by type is untried.
+- **Rationale**: Group models by type (exact match, neural, statistical),
+  mix within groups, then mix group outputs. Reduces interaction noise.
+  Standard in cmix (3-layer mixer hierarchy).
+- **Heritage**: Cascaded SSE always overcorrects. Hierarchical by type untried.
+
+### P2.3: Multi-corpus Validation Suite
+
+- **Impact**: Keeps system honest — prevents enwik8 overfitting
+- **Effort**: Low
+- **Risk**: None
+- **Rationale**: Measure on multiple corpora to verify universality:
+  - enwik8 (English Wikipedia XML, 100MB) — primary benchmark
+  - enwik9 (1GB) — scale test
+  - Calgary corpus (mixed: text, binary, images) — classic benchmark
+  - Silesia corpus (mixed: source code, database, medical, images)
+  - Custom binary test (compiled executables, random mixed)
+- **Kill criteria**: If BPB improves on enwik8 but degrades on Silesia, overfitting.
+
+## Phase 3 — Frontier Techniques
+
+Priority: high-complexity techniques for pushing toward <1.0 BPB.
+
+### P3.1: SA-PPM / Suffix Array Predictor
+
+- **Impact**: est. -0.10 to -0.30 BPB
+- **Effort**: Very High
+- **Risk**: High — O(n) construction, 400-800 MB for 100MB input
+- **Rationale**: Suffix array unifies all context matching into one optimal
+  structure. PPM alone achieves ~1.50 BPB. With neural predictions, could be
+  the single largest remaining win. Universal — works on any byte stream.
+- **Heritage**: Tier 1 in heritage.md. Never attempted.
+- **Dependencies**: RAM budget (~400-800 MB for enwik8).
+
+### P3.2: Domain-Matched Neural Checkpoint
+
+- **Impact**: est. -0.10 to -0.20 BPB
+- **Effort**: Very High (needs GPU)
+- **Risk**: High — GPU access, domain-specific = less universal
+- **Rationale**: Fine-tuning RWKV on target domain improves base predictions.
+  ts_zip achieves 1.11 BPB with RWKV-169M. But this is domain-specific,
+  contradicting universality. Useful as an optional mode, not core design.
+- **Kill criteria**: Must be opt-in. Default mode must work without fine-tuning.
 
 ## Priority Matrix
 
-| Action | Est. Delta BPB | Effort | Risk | Priority |
-|---|---|---|---|---|
-| P1.1 CDF-24 | -0.05 to -0.10 | Medium | Low | **1 (next)** |
-| P1.2 N-gram 5-6 | -0.01 to -0.03 | Low | Low | **2** |
-| P1.4 Confidence skip | ~0 BPB, 2-5x speed | Medium | Medium | **3** |
-| P2.1 Context models | -0.05 to -0.15 | High | Medium | **4** |
-| P2.2 LSTM mixer | -0.05 to -0.22 | High | Medium | **5** |
-| P1.3 Full enwik8 | official number | Time | None | **6 (after P1.4)** |
-| P3.1 Domain checkpoint | -0.10 to -0.20 | Very High | High | 7 (needs GPU) |
-| P3.2 SA-PPM | -0.30 to -0.60 | Very High | High | 8 (research) |
-| P2.3 Byte-level path | -0.02 to -0.05 | Medium | Medium | 9 |
-| P3.3 Hierarchical mixer | -0.02 to -0.05 | Medium-High | Medium | 10 |
+| # | Action | Est. Delta BPB | Effort | Universal? | Priority |
+|---|---|---|---|---|---|
+| P1.1 | Arithmetic coder | -0.05 to -0.10 | Medium | Yes | **1** |
+| P1.2 | Byte-level CM | -0.05 to -0.15 | High | Yes | **2** |
+| P1.3 | RWKV→byte bridge | enables mixing | Medium | Yes | **3** |
+| P1.4 | Confidence skip | 2-5x speed | Medium | Yes | **4** |
+| P2.1 | LSTM mixer | -0.05 to -0.22 | High | Yes | **5** |
+| P2.3 | Multi-corpus validation | honesty check | Low | Yes | **6** |
+| P2.2 | Hierarchical groups | -0.02 to -0.05 | Medium-High | Yes | **7** |
+| P3.1 | SA-PPM | -0.10 to -0.30 | Very High | Yes | **8** |
+| P3.2 | Domain checkpoint | -0.10 to -0.20 | Very High | No (opt-in) | **9** |
 
 ## Projected Trajectory
 
-Optimistic (all Phase 1-2 succeed):
+Optimistic (Phase 1-2 succeed):
 ```
-1.3238  current
-1.27    + CDF-24 (-0.05)
-1.25    + N-gram 5-6 (-0.02)
-1.15    + CM models (-0.10)
-1.00    + LSTM mixer (-0.15)
+1.2984  current (100KB enwik8)
+1.24    + arithmetic coder (-0.05)
+1.12    + byte-level CM (-0.12)
+1.10    + RWKV→byte bridge (enables full mixing)
+0.93    + LSTM mixer (-0.17)
 ```
 
 Conservative (Phase 1 only, partial gains):
 ```
-1.3238  current
-1.29    + CDF-24 (-0.03)
-1.28    + N-gram 5-6 (-0.01)
-1.26    + confidence skip (no BPB change, 3x speed)
+1.2984  current
+1.25    + arithmetic coder (-0.05)
+1.18    + byte-level CM (-0.07)
+1.16    + bridge + confidence skip
 ```
 
-The < 1.0 target requires Phase 2 components (CM + LSTM mixer) or Phase 3
-(domain-matched checkpoint or SA-PPM). Phase 1 alone reaches ~1.25-1.28.
+The < 1.0 target requires both byte-level CM (Phase 1) and LSTM mixer
+(Phase 2). Neither alone is sufficient, but together they replicate the
+architecture that every sub-1.0 system uses: neural generalization +
+statistical exact-match + temporal mixing.
+
+## Completed
+
+| Phase | Result | Date |
+|---|---|---|
+| RWKV-7 0.1B integration | 1.4691 BPB baseline | 2026-10-01 |
+| Token ensemble (N-gram + bias) | 1.4086 BPB (-0.0605) | 2026-10-01 |
+| Hyperparameter tuning | 1.3078 BPB (10KB) | 2026-10-02 |
+| AdaptiveMixer | 1.3238 BPB (100KB, -0.0043) | 2026-10-02 |
+| Q8 quantization (all layers) | 1.2984 BPB (-0.0254), -75% RAM | 2026-10-05 |
+| Scratch arena (buffer reuse) | +46% speed (80→117 B/s), ~0 allocs | 2026-10-05 |
+| AVX-VNNI post-scratch | +38% speed (117→162 B/s) | 2026-10-05 |
 
 ## Constraints
 
-- **CPU-only**: i5-1235U, 32 GB DDR5, no GPU
-- **RAM budget**: ~16 GB for inference (RWKV ~350 MB, CM hash tables est. ~6-8 GB)
-- **Throughput**: 85 B/s current, full enwik8 = ~327h without speed optimization
-- **Max 1 heavy task**: concurrent RWKV evaluations cause CPU thrashing
+- **CPU-only**: i5-1235U (Alder Lake), 12 threads, 32 GB DDR5, no GPU
+- **RAM budget**: ~16 GB for inference (RWKV ~130 MB Q8, CM hash tables est. ~6-8 GB)
+- **Throughput**: 162 B/s current, full enwik8 ≈ 171h (~7 days)
+- **Max 1 heavy task**: concurrent evaluations cause CPU thrashing
 - **Zero external deps**: all code must compile with rustc + stdlib only
