@@ -12,7 +12,7 @@
 | Phase 0 — dynamic lr | 1.2997 | surprise-modulated tau=2000, 10KB (KILLED) |
 | Phase 0 — adaptive mixer (10KB) | 1.2997 | learned weights eta=0.10, 10KB |
 | Phase 0 — adaptive mixer (100KB) | 1.3238 | learned weights eta=0.01, 100KB |
-| Phase 1 — Q8 all layers (100KB) | **1.2984** | Q8 int-accum + VNNI, 162 B/s, -75% RAM (BEST) |
+| Phase 1 — Q8 all layers (100KB) | 1.2984 | Q8 int-accum + VNNI, 162 B/s, -75% RAM |
 | Phase 1 — Arithmetic coder (1KB) | 1.1680 | Range coder CDF-24, roundtrip verified |
 | Phase 1 — Arithmetic coder (10KB) | 1.3320 | Compressed BPB, CE=1.2812, overhead=0.0508 |
 | Phase 1 — CM standalone (100KB) | 2.4078 | 9 bit-level models, logistic mixer, 78 MB |
@@ -36,8 +36,7 @@
 1.31  azathoth-lm tuned (lr=0.30, scale=0.5, 10KB)
 1.30  azathoth-lm Q8 int-accum (eta=0.01, lr=0.30, scale=0.5, 100KB)
 1.29  azathoth-lm hybrid logistic CM+RWKV (100KB)
-1.25  azathoth-lm LSTM hybrid CM+RWKV (100KB) ← CURRENT
-1.30  azathoth-lm dynamic lr (surprise-mod tau=2000, 10KB)
+1.25  azathoth-lm LSTM hybrid CM+RWKV (100KB) ← CURRENT BEST
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
 1.17  cmix        (2077 models + LSTM)
@@ -45,10 +44,9 @@
 1.07  SHA-RNN     (63M params)
 0.97  fx2-cmix    (6M Transformer + 2000+ CM)
 0.94  Nacrith     (135M SmolLM2 + CM)
-~1.16 ← PROJECTED azathoth-lm (0.1B + byte CM + bridge + confidence skip)
-~0.93 ← PROJECTED azathoth-lm (+ LSTM mixer, optimistic)
-~0.95 ← KILLED: G1k 1.5B = 5.27 BPB (domain mismatch)
-<1.0  ← OUR TARGET (requires byte-level CM + LSTM mixer)
+~1.20 ← PROJECTED azathoth-lm (+ more CM + hierarchical groups + full enwik8)
+~1.05 ← PROJECTED azathoth-lm (+ SA-PPM, optimistic)
+<1.0  ← OUR TARGET (likely requires SA-PPM or larger neural predictor)
 ```
 
 ## Benchmark Dashboard
@@ -62,7 +60,7 @@
 | bytes/s (LSTM) | **134** | **2026-10-06** |
 | allocs/token | **~0** (scratch arena) | **2026-10-05** |
 | MB RAM (Q8 all layers) | **~130** | **2026-10-05** |
-| BPB/Mparam | 0.0130 | 2026-10-05 |
+| BPB/Mparam | 0.0125 | 2026-10-06 |
 
 ### Cross-Domain (pending — requires arithmetic coder + byte-level CM)
 
@@ -71,7 +69,7 @@ Full protocol in `docs/BENCHMARKS.md`. Will measure 11 categories across
 
 | Category | azathoth | zstd-19 | PAQ8px | Status |
 |---|---|---|---|---|
-| Text EN (enwik8) | 1.2984 | — | — | Measured (100KB quick) |
+| Text EN (enwik8) | 1.2549 | — | — | Measured (100KB, LSTM hybrid) |
 | Text non-EN | — | — | — | Pending |
 | Source code | — | — | — | Pending |
 | Structured (JSON) | — | — | — | Pending |
@@ -141,7 +139,7 @@ See R11 for Q8 quantization details, R14 for VNNI and scratch arena.
 0.1B outperforms it on enwik8. G1k 1.5B verified correct (forward pass
 matches Python reference) but its training data is incompatible with enwik8.
 
-Strategy: maximize 0.1B ensemble (confidence skip, tuned N-gram, CDF-24).
+Strategy: maximize 0.1B hybrid (byte CM + LSTM mixer + bridge).
 See `docs/research/r05-scaling-analysis.md` for full analysis.
 
 ## Hyperparameter Tuning (R06, 2026-10-02)
@@ -309,7 +307,14 @@ not coder bugs. Verified by roundtrip identity on both sizes.
 
 ## Roadmap
 
-Universal compressor design. Prioritized actions in `docs/ROADMAP.md`:
-1. **Phase 1 — Universal Core**: Arithmetic coder, byte-level CM, RWKV→byte bridge, confidence skip
-2. **Phase 2 — Advanced Mixing**: LSTM mixer, hierarchical groups, multi-corpus validation
-3. **Phase 3 — Frontier**: SA-PPM, domain-matched checkpoint (opt-in)
+Universal compressor design. Full details in `docs/ROADMAP.md`.
+
+### Completed
+- **Phase 1 — Universal Core**: Arithmetic coder (P1.1), byte-level CM (P1.2),
+  RWKV→byte bridge (P1.3). Confidence skip KILLED (P1.4).
+- **Phase 2.1 — LSTM Mixer**: -0.0375 BPB over logistic. New best: 1.2549.
+
+### Next
+- **P2.3**: Multi-corpus validation (enwik8 + Silesia/Calgary)
+- **P2.2**: Hierarchical model groups (est. -0.02 to -0.05)
+- **P3.1**: SA-PPM / suffix array predictor (est. -0.10 to -0.30)

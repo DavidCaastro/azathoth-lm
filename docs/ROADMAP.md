@@ -1,7 +1,7 @@
 # Roadmap — azathoth-lm
 
-**Date**: 2026-10-05
-**Baseline**: 1.2984 BPB (100KB enwik8), 162 B/s (Q8 + VNNI + scratch arena)
+**Date**: 2026-10-06
+**Current best**: 1.2549 BPB (100KB enwik8), 134 B/s (LSTM hybrid CM+RWKV)
 **Target**: < 1.0 BPB — universal compressor, measured on enwik8
 
 ## Design Philosophy
@@ -25,7 +25,7 @@ Principles:
 ## Current Position
 
 ```
-1.30  azathoth-lm   (0.1B RWKV + token N-gram + bias + mixer, 162 B/s)
+1.25  azathoth-lm   (0.1B RWKV + 9 byte CM + LSTM mixer, 134 B/s)
 1.27  PAQ8px        (200+ byte-level CM, universal)
 1.19  NNCP v3       (199M Transformer-XL)
 1.17  cmix          (2077 byte-level models + LSTM mixer, universal)
@@ -34,21 +34,22 @@ Principles:
 0.94  Nacrith       (135M SmolLM2 + byte-level CM, universal)
 ```
 
-Gap to target: ~0.30 BPB. Gap to PAQ8px: ~0.03 BPB.
+Gap to target: ~0.25 BPB. **Below PAQ8px** at 100KB (-0.02 BPB).
 
 ### What we have vs what we need
 
-| Component | azathoth-lm | PAQ8px/cmix/Nacrith |
+| Component | azathoth-lm (current) | PAQ8px/cmix/Nacrith |
 |---|---|---|
-| Neural predictor | RWKV-7 0.1B (token-level) | Transformer/LM (byte-level bridge) |
-| Context models | 2 (token N-gram + bias head) | 50-2000+ (byte/bit-level) |
-| Mixer | Logistic additive + AdaptiveMixer | LSTM / logistic multi-layer |
-| Entropy coder | Cross-entropy measurement only | Full arithmetic coder |
-| Operating level | Token (65K vocab) | Byte/bit |
-| Adaptation | Online SGD on 2 components | Online SGD on all components |
+| Neural predictor | RWKV-7 0.1B Q8 (token→byte bridge) | Transformer/LM (byte-level bridge) |
+| Context models | 9 byte-level CM (orders 1-8 + unigram) | 50-2000+ (byte/bit-level) |
+| Mixer | LSTM (H=128, 71K params, BPTT=1) | LSTM / logistic multi-layer |
+| Entropy coder | Range coder CDF-24 (roundtrip verified) | Full arithmetic coder |
+| Operating level | Byte/bit (MSB-first decomposition) | Byte/bit |
+| Adaptation | Online SGD on all components | Online SGD on all components |
 
-The biggest gap is not tuning — it's **missing architecture**: byte-level CM
-and an entropy coder. These are the two halves that make a compressor universal.
+The architecture is now **structurally complete**: neural + statistical CM +
+LSTM mixer + arithmetic coder. Remaining gap is **scale** (9 vs 200+ models)
+and **advanced mixing** (hierarchical groups, more CM diversity).
 
 ## Phase 1 — Universal Compressor Core
 
@@ -188,41 +189,65 @@ Priority: high-complexity techniques for pushing toward <1.0 BPB.
 
 ## Priority Matrix
 
-| # | Action | Est. Delta BPB | Effort | Universal? | Priority |
-|---|---|---|---|---|---|
-| P1.1 | Arithmetic coder | -0.05 to -0.10 | Medium | Yes | **1** |
-| P1.2 | Byte-level CM | -0.05 to -0.15 | High | Yes | **2** |
-| P1.3 | RWKV→byte bridge | enables mixing | Medium | Yes | **3** |
-| P1.4 | Confidence skip | 2-5x speed | Medium | Yes | **4** |
-| P2.1 | LSTM mixer | -0.05 to -0.22 | High | Yes | **5** |
-| P2.3 | Multi-corpus validation | honesty check | Low | Yes | **6** |
-| P2.2 | Hierarchical groups | -0.02 to -0.05 | Medium-High | Yes | **7** |
-| P3.1 | SA-PPM | -0.10 to -0.30 | Very High | Yes | **8** |
-| P3.2 | Domain checkpoint | -0.10 to -0.20 | Very High | No (opt-in) | **9** |
+| # | Action | Est. Delta BPB | Actual | Status |
+|---|---|---|---|---|
+| P1.1 | Arithmetic coder | -0.05 to -0.10 | overhead 0.0508 (10KB) | **DONE** |
+| P1.2 | Byte-level CM | -0.05 to -0.15 | 2.09 BPB standalone | **DONE** |
+| P1.3 | RWKV→byte bridge | enables mixing | -0.0060 BPB hybrid | **DONE** |
+| P1.4 | Confidence skip | 2-5x speed | <3% speed gain | **KILLED** |
+| P2.1 | LSTM mixer | -0.05 to -0.22 | **-0.0375 BPB** | **DONE** |
+| P2.3 | Multi-corpus validation | honesty check | — | Next |
+| P2.2 | Hierarchical groups | -0.02 to -0.05 | — | Pending |
+| P3.1 | SA-PPM | -0.10 to -0.30 | — | Pending |
+| P3.2 | Domain checkpoint | -0.10 to -0.20 | — | Pending |
 
 ## Projected Trajectory
 
-Optimistic (Phase 1-2 succeed):
+### Projections vs Actuals (Phase 1-2)
+
 ```
-1.2984  current (100KB enwik8)
-1.24    + arithmetic coder (-0.05)
-1.12    + byte-level CM (-0.12)
-1.10    + RWKV→byte bridge (enables full mixing)
-0.93    + LSTM mixer (-0.17)
+Projected                           Actual
+─────────                           ──────
+1.2984  baseline                    1.2984  baseline
+1.24    + arith coder (-0.05)       n/a     (coder adds overhead, not BPB gain)
+1.12    + byte CM (-0.12)           2.09    standalone (not additive — CM feeds mixer)
+1.10    + bridge (-0.02)            1.2924  hybrid logistic (-0.0060)
+ n/a    + confidence skip           KILLED  (<3% speed, RWKV=97% compute)
+0.93    + LSTM mixer (-0.17)        1.2549  LSTM hybrid (-0.0375 vs logistic)
 ```
 
-Conservative (Phase 1 only, partial gains):
+### Key Lessons
+
+- **Cumulative gains don't add linearly.** Each component's contribution
+  depends on what's already in the stack. CM standalone = 2.09, but its
+  value is in providing diverse inputs for the LSTM mixer.
+- **LSTM gain (-0.0375) less than heritage predicted (-0.22)** because we
+  have 10 models (9 CM + 1 RWKV) vs analytic-lm's 54. Still improving at 100KB.
+- **Confidence skip was architectural dead end** — RWKV sequential state
+  prevents skipping the dominant compute cost.
+
+### Remaining Trajectory (from 1.2549)
+
+Optimistic:
 ```
-1.2984  current
-1.25    + arithmetic coder (-0.05)
-1.18    + byte-level CM (-0.07)
-1.16    + bridge + confidence skip
+1.2549  current (100KB enwik8, LSTM hybrid)
+1.23    + more CM models (20-30 orders/types)
+1.21    + hierarchical model groups (-0.02)
+1.18    + full enwik8 (LSTM improves with more data)
+1.05    + SA-PPM (-0.13)
 ```
 
-The < 1.0 target requires both byte-level CM (Phase 1) and LSTM mixer
-(Phase 2). Neither alone is sufficient, but together they replicate the
-architecture that every sub-1.0 system uses: neural generalization +
-statistical exact-match + temporal mixing.
+Conservative:
+```
+1.2549  current
+1.24    + more CM models (-0.01)
+1.22    + hierarchical groups (-0.02)
+1.20    + full enwik8 asymptotic (-0.02)
+```
+
+The < 1.0 target likely requires SA-PPM (Phase 3) or a larger neural
+predictor. The current architecture is structurally complete but needs
+more scale (models, data) and possibly suffix-based prediction.
 
 ## Completed
 
@@ -245,6 +270,6 @@ statistical exact-match + temporal mixing.
 
 - **CPU-only**: i5-1235U (Alder Lake), 12 threads, 32 GB DDR5, no GPU
 - **RAM budget**: ~16 GB for inference (RWKV ~130 MB Q8, CM hash tables est. ~6-8 GB)
-- **Throughput**: 162 B/s current, full enwik8 ≈ 171h (~7 days)
+- **Throughput**: 134 B/s LSTM hybrid (was 162 B/s logistic), full enwik8 ≈ 207h (~8.6 days)
 - **Max 1 heavy task**: concurrent evaluations cause CPU thrashing
 - **Zero external deps**: all code must compile with rustc + stdlib only
