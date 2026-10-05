@@ -11,9 +11,10 @@
 | Phase 0 — tuned ensemble | 1.3078 | lr=0.30, scale=0.5, 10KB |
 | Phase 0 — dynamic lr | 1.2997 | surprise-modulated tau=2000, 10KB (KILLED) |
 | Phase 0 — adaptive mixer (10KB) | 1.2997 | learned weights eta=0.10, 10KB |
-| Phase 0 — adaptive mixer (100KB) | **1.3238** | learned weights eta=0.01, 100KB (BEST) |
+| Phase 0 — adaptive mixer (100KB) | 1.3238 | learned weights eta=0.01, 100KB |
+| Phase 1 — Q8 all layers (100KB) | **1.2984** | Q8 int-accum, 117 B/s, -75% RAM (BEST) |
 
-100KB "quick" eval. Full enwik8 pending throughput optimization (85 B/s → ~327h).
+100KB "quick" eval. Full enwik8 now feasible: 117 B/s → ~10 days (was ~25 days at 46 B/s).
 
 ## Target Landscape (enwik8)
 
@@ -24,8 +25,9 @@
 1.50  PPM
 1.41  azathoth-lm ensemble (RWKV+N-gram+bias, 100KB quick)
 1.33  azathoth-lm tuned static (lr=0.30, scale=0.5, 100KB)
-1.32  azathoth-lm mixer (eta=0.01, lr=0.30, scale=0.5, 100KB)
+1.32  azathoth-lm mixer f32 (eta=0.01, lr=0.30, scale=0.5, 100KB)
 1.31  azathoth-lm tuned (lr=0.30, scale=0.5, 10KB)
+1.30  azathoth-lm Q8 int-accum (eta=0.01, lr=0.30, scale=0.5, 100KB) ← CURRENT
 1.30  azathoth-lm dynamic lr (surprise-mod tau=2000, 10KB)
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
@@ -52,11 +54,13 @@
 | BPB mixer eta=0.10 (enwik8 10KB) | 1.2997 | 2026-10-02 |
 | BPB mixer eta=0.10 (enwik8 100KB) | 1.3278 | 2026-10-02 |
 | BPB mixer eta=0.01 (enwik8 100KB) | 1.3238 | 2026-10-02 |
+| **BPB Q8 int-accum (enwik8 100KB)** | **1.2984** | **2026-10-05** |
+| BPB Q8 int-accum (enwik8 10KB) | 1.2797 | 2026-10-05 |
 | BPB RWKV-only (enwik8 10KB) | 1.4298 | 2026-10-01 |
-| bytes/s | 85 | 2026-10-01 |
-| MB RAM (f32 layers + Q8 head) | ~350 | 2026-10-01 |
-| ms/tok | ~46 | 2026-10-01 |
-| BPB/Mparam | 0.0141 | 2026-10-01 |
+| bytes/s | **117** | **2026-10-05** |
+| MB RAM (Q8 all layers) | **~130** | **2026-10-05** |
+| ms/tok | ~34 | 2026-10-05 |
+| BPB/Mparam | 0.0130 | 2026-10-05 |
 | ARC-C | — | — |
 | HellaSwag | — | — |
 | MMLU | — | — |
@@ -68,7 +72,7 @@
 
 - **Model**: RWKV-7 "Goose" 0.1B World (100M params, D=768, H=12, L=12)
 - **Weights**: HuggingFace `BlinkDL/rwkv-7-world` SafeTensors
-- **Quantization**: f32 layers + Q8 head (48 MB head, ~350 MB total)
+- **Quantization**: Q8 all layers + Q8 head (~130 MB total, was ~516 MB f32)
 - **Tokenizer**: World (65,536 tokens), greedy encoding
 - **Evaluation**: token-level cross-entropy → BPB over raw bytes
 
@@ -92,8 +96,8 @@ components learn document patterns. Full enwik8 delta est. -0.07 to -0.10.
 
 ### Throughput Status
 
-At 72 B/s (f32 layers + Q8 head), full enwik8 = ~386h.
-See R03/R04 for optimization path (VNNI kernel, confidence skip).
+At 117 B/s (Q8 all layers, int-accum kernel), full enwik8 ≈ 237h (~10 days).
+See R11 for Q8 quantization details, R03/R04 for further optimization.
 
 ## Scaling Results (R05, 2026-10-02)
 

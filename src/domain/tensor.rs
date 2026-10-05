@@ -134,45 +134,58 @@ impl Q8Tensor {
     }
 }
 
-/// y = Q8_mat @ f32_vec. Dequantizes on the fly.
-/// Each row: out[r] = scale[r] * sum(q[r][c] * vec[c])
+/// y = Q8_mat @ f32_vec using integer accumulation.
+/// Quantizes the input vector to i8 once, then does i8*i8 → i32 dot products.
+/// Each row: out[r] = row_scale[r] * vec_scale * sum(q_row[c] * q_vec[c])
 pub fn q8_mat_vec_mul(mat: &Q8Tensor, vec: &Tensor) -> Tensor {
     assert_eq!(vec.shape.len(), 1);
     let rows = mat.rows;
     let cols = mat.cols;
     assert_eq!(vec.shape[0], cols);
 
+    let v = &vec.as_slice()[..cols];
+
+    // Quantize input vector to i8 (amortized over all rows)
+    let mut v_abs_max = 0.0f32;
+    for &x in v { let a = x.abs(); if a > v_abs_max { v_abs_max = a; } }
+    let v_scale = if v_abs_max > 0.0 { v_abs_max / 127.0 } else { 1.0 };
+    let v_inv = 1.0 / v_scale;
+    let mut v_q = vec![0i8; cols];
+    for c in 0..cols {
+        v_q[c] = (v[c] * v_inv).round().clamp(-127.0, 127.0) as i8;
+    }
+
     let mut out = vec![0.0f32; rows];
     let q = &mat.q_data;
-    let v = &vec.as_slice()[..cols];
     let scales = &mat.scales;
 
+    // Integer dot product: i8 * i8 → i32 accumulation (SIMD-friendly)
     let rows_4 = rows / 4 * 4;
     for r in (0..rows_4).step_by(4) {
         let q0 = &q[r * cols..(r + 1) * cols];
         let q1 = &q[(r + 1) * cols..(r + 2) * cols];
         let q2 = &q[(r + 2) * cols..(r + 3) * cols];
         let q3 = &q[(r + 3) * cols..(r + 4) * cols];
-        let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let (mut s0, mut s1, mut s2, mut s3) = (0i32, 0i32, 0i32, 0i32);
         for c in 0..cols {
-            let vc = v[c];
-            s0 += q0[c] as f32 * vc;
-            s1 += q1[c] as f32 * vc;
-            s2 += q2[c] as f32 * vc;
-            s3 += q3[c] as f32 * vc;
+            let vc = v_q[c] as i32;
+            s0 += q0[c] as i32 * vc;
+            s1 += q1[c] as i32 * vc;
+            s2 += q2[c] as i32 * vc;
+            s3 += q3[c] as i32 * vc;
         }
-        out[r] = s0 * scales[r];
-        out[r + 1] = s1 * scales[r + 1];
-        out[r + 2] = s2 * scales[r + 2];
-        out[r + 3] = s3 * scales[r + 3];
+        out[r] = s0 as f32 * (scales[r] * v_scale);
+        out[r + 1] = s1 as f32 * (scales[r + 1] * v_scale);
+        out[r + 2] = s2 as f32 * (scales[r + 2] * v_scale);
+        out[r + 3] = s3 as f32 * (scales[r + 3] * v_scale);
     }
     for r in rows_4..rows {
         let qr = &q[r * cols..(r + 1) * cols];
-        let mut sum = 0.0f32;
+        let mut sum = 0i32;
         for c in 0..cols {
-            sum += qr[c] as f32 * v[c];
+            sum += qr[c] as i32 * v_q[c] as i32;
         }
-        out[r] = sum * scales[r];
+        out[r] = sum as f32 * (scales[r] * v_scale);
     }
     Tensor::from_data(out, vec![rows])
 }
