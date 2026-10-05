@@ -201,6 +201,25 @@ Static lr sweep on 100KB (scale=0.5):
 doesn't degrade on 100KB, but improvement is negligible (-0.0003).
 See `docs/research/r08-adaptive-mixer.md` for full analysis.
 
+## R14: Alternative Number Systems (2026-10-05)
+
+Exhaustive survey of 8 non-standard number systems for CPU inference.
+40+ web searches, 6 parallel research threads. See `docs/research/r14-alternative-number-systems.md`.
+
+**Winner: Ternary (BitNet b1.58)** — 5-30x speedup, matches FP16 quality (QAT), multiplication-free.
+Requires ternary-trained weights. Post-training ternary as experiment on RWKV 0.1B.
+
+| System | Verdict | Reason |
+|---|---|---|
+| Ternary (BitNet b1.58) | **WINNER** | 5-30x CPU speedup, match FP16 quality |
+| BFP sub-row (MX) | Incremental | Our Q8 already is BFP; block=32 modest gain |
+| ANS | Adopt for coder | Industry-standard entropy coding |
+| LNS | Rejected | Accumulation bottleneck kills dot products |
+| RNS | Rejected | Carry-free irrelevant on CPU (1-cycle adds) |
+| Stochastic | Rejected | Precision O(1/sqrt(N)), CPU-impractical |
+| Posit | Rejected | 4-20x slower in software |
+| Balanced ternary | Rejected | Cannot emulate on binary hardware |
+
 ## Roadmap
 
 Prioritized next actions in `docs/ROADMAP.md`. Key phases:
