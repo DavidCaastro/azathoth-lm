@@ -8,7 +8,7 @@ use crate::domain::tensor::{softmax, entropy_from_logits};
 use crate::domain::ngram::TokenNgram;
 use crate::domain::bias_head::BiasHead;
 use crate::domain::mixer::AdaptiveMixer;
-use crate::application::telemetry::ProgressTracker;
+use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot};
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
 
@@ -33,7 +33,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  compress    --input PATH [--ckpt PATH]");
-    eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F]");
+    eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
 }
@@ -50,6 +50,7 @@ fn cmd_baseline(args: &[String]) {
     let mut adaptive_ngram = false; // StateSMix-style entropy-adaptive N-gram
     let mut use_mix = false; // adaptive component weighting
     let mut mix_eta: f32 = 0.01; // mixer learning rate
+    let mut log_path: Option<String> = None; // Level 2 structured log
 
     let mut i = 0;
     while i < args.len() {
@@ -65,6 +66,7 @@ fn cmd_baseline(args: &[String]) {
             "--adaptive" => { adaptive_ngram = true; }
             "--mix" => { use_mix = true; use_ensemble = true; }
             "--mix-eta" => { i += 1; mix_eta = args[i].parse().unwrap(); use_mix = true; use_ensemble = true; }
+            "--log" => { i += 1; log_path = Some(args[i].clone()); }
             _ => {}
         }
         i += 1;
@@ -126,6 +128,10 @@ fn cmd_baseline(args: &[String]) {
     // Run forward pass and measure cross-entropy
     let mut state = Rwkv7State::new(&model.config);
     let mut tracker = ProgressTracker::new(total_bytes);
+    let mut logger = log_path.as_ref().map(|p| {
+        eprintln!("[baseline] logging to: {}", p);
+        JsonLogger::new(p, total_bytes)
+    });
 
     eprintln!("[baseline] starting evaluation ...");
     eprintln!();
@@ -202,17 +208,28 @@ fn cmd_baseline(args: &[String]) {
                 bias.update(&probs.data, tok);
             }
 
-            // Update telemetry extra info
+            // Update telemetry extra info + build log snapshot
+            let (eff_lr, ema_s) = bias.telemetry();
+            let snap = LogSnapshot {
+                w_ngram: if use_mix { mixer.w_ngram } else { 0.0 },
+                w_bias: if use_mix { mixer.w_bias } else { 0.0 },
+                eff_lr,
+                ema_surprise: ema_s,
+            };
             if use_mix {
-                tracker.set_extra(format!("w_ng={:.3} w_b={:.3}", mixer.w_ngram, mixer.w_bias));
+                tracker.set_extra(format!("w_ng={:.3} w_b={:.3}", snap.w_ngram, snap.w_bias));
             } else if use_ensemble && lr_tau > 0.0 {
-                let (eff_lr, ema_s) = bias.telemetry();
-                tracker.set_extra(format!("lr={:.4} surp={:.2}", eff_lr, ema_s));
+                tracker.set_extra(format!("lr={:.4} surp={:.2}", snap.eff_lr, snap.ema_surprise));
             } else if use_ensemble && adaptive_ngram {
                 let h = entropy_from_logits(&logits.data);
                 let beta = 0.6f32;
                 let s = ((1.0 - beta) + beta * (h / 5.5)).clamp(0.2, 2.5);
                 tracker.set_extra(format!("H={:.2} s={:.3}", h, s * ngram_scale));
+            }
+
+            // Level 2: structured log
+            if let Some(ref mut log) = logger {
+                log.record_token(token_byte_lengths[t], prob, &snap);
             }
 
             // Distribute this token's bits across its bytes
@@ -237,6 +254,19 @@ fn cmd_baseline(args: &[String]) {
         let pct = 100.0 * skipped as f64 / (tokens.len() - 1) as f64;
         eprintln!("[baseline] confidence skip: {}/{} tokens skipped ({:.1}%)",
                   skipped, tokens.len() - 1, pct);
+    }
+
+    // Finalize Level 2 log
+    if let Some(ref mut log) = logger {
+        let (eff_lr, ema_s) = bias.telemetry();
+        let snap = LogSnapshot {
+            w_ngram: if use_mix { mixer.w_ngram } else { 0.0 },
+            w_bias: if use_mix { mixer.w_bias } else { 0.0 },
+            eff_lr,
+            ema_surprise: ema_s,
+        };
+        log.finalize(&snap);
+        eprintln!("[baseline] log written: {}", log_path.as_ref().unwrap());
     }
 
     tracker.final_report();
