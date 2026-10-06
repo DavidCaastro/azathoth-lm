@@ -5,8 +5,14 @@
 //! patterns over the byte stream.
 //!
 //! Heritage: LSTM mixing = +0.22 BPB over logistic (analytic-lm).
-//! BPTT=1 only (BPTT>1 during eval = +0.10 BPB FAIL).
-//! HID=128+. SGD > Adam.
+//! BPTT=1 only (BPTT>1 during eval = +0.10 BPB FAIL — but safe
+//! in unified train+predict mode, see R34).
+//! HID=128+. SGD > Adam (for now; BPTT>1 will need Adam).
+//!
+//! Coupled gates (S1, R34): i_gate = 1 - f_gate. Validated by
+//! "LSTM: A Search Space Odyssey" (Greff et al., 5400 experiments)
+//! and used in cmix production. Prevents cell state from growing
+//! unboundedly. -25% effective gate params.
 
 #[inline]
 fn stretch(p: f32) -> f32 {
@@ -49,7 +55,8 @@ pub struct LstmBitMixer {
     hidden_dim: usize,
     n_models: usize,
 
-    // LSTM gates: [forget, input, candidate, output]
+    // LSTM gates: [forget, candidate, output] (3 gates)
+    // Input gate is coupled: i = 1 - f (S1)
     // w_ih[gate*H*I + h*I + i] — input-to-hidden
     w_ih: Vec<f32>,
     // w_hh[gate*H*H + h*H + j] — hidden-to-hidden
@@ -81,16 +88,17 @@ pub struct LstmBitMixer {
 impl LstmBitMixer {
     pub fn new(n_models: usize, hidden_dim: usize, lr: f32) -> Self {
         let input_dim = n_models;
-        let h4 = 4 * hidden_dim;
+        // 3 gates: forget, candidate, output (input gate is coupled: i = 1-f)
+        let h3 = 3 * hidden_dim;
 
         // Xavier initialization scales
         let scale_ih = (6.0 / (input_dim + hidden_dim) as f32).sqrt();
         let scale_hh = (6.0 / (2 * hidden_dim) as f32).sqrt();
         let scale_out = (6.0 / (n_models + hidden_dim) as f32).sqrt();
 
-        let mut w_ih = vec![0.0f32; h4 * input_dim];
-        let mut w_hh = vec![0.0f32; h4 * hidden_dim];
-        let mut bias = vec![0.0f32; h4];
+        let mut w_ih = vec![0.0f32; h3 * input_dim];
+        let mut w_hh = vec![0.0f32; h3 * hidden_dim];
+        let mut bias = vec![0.0f32; h3];
         let mut w_out = vec![0.0f32; n_models * hidden_dim];
         let b_out = vec![1.0 / n_models as f32; n_models]; // uniform initial weights
 
@@ -108,7 +116,7 @@ impl LstmBitMixer {
             seed = seed.wrapping_add(7);
         }
 
-        // Forget gate bias = 1.0 (heritage: helps LSTM retain early)
+        // Forget gate bias = 1.0 (heritage: retain early, i=1-f starts ~0.27)
         for h in 0..hidden_dim {
             bias[h] = 1.0;
         }
@@ -142,11 +150,11 @@ impl LstmBitMixer {
             return;
         }
         let old_input = self.input_dim;
-        let h4 = 4 * self.hidden_dim;
+        let h3 = 3 * self.hidden_dim;
 
         // Extend w_ih: add columns for new inputs
-        let mut new_w_ih = vec![0.0f32; h4 * new_total];
-        for row in 0..h4 {
+        let mut new_w_ih = vec![0.0f32; h3 * new_total];
+        for row in 0..h3 {
             for col in 0..old_input {
                 new_w_ih[row * new_total + col] = self.w_ih[row * old_input + col];
             }
@@ -186,8 +194,9 @@ impl LstmBitMixer {
         self.h_prev.copy_from_slice(&self.h);
         self.c_prev.copy_from_slice(&self.c);
 
-        // Compute 4 gates
-        for gh in 0..(4 * hd) {
+        // Compute 3 gates: forget, candidate, output
+        // Input gate is coupled: i = 1 - f (S1)
+        for gh in 0..(3 * hd) {
             let mut val = self.bias[gh];
             let ih_base = gh * self.input_dim;
             for j in 0..n {
@@ -201,10 +210,12 @@ impl LstmBitMixer {
             let gate = gh / hd;
             let idx = gh % hd;
             match gate {
-                0 => self.f_gate[idx] = sigmoid(val),
-                1 => self.i_gate[idx] = sigmoid(val),
-                2 => self.g_gate[idx] = val.tanh(),
-                3 => self.o_gate[idx] = sigmoid(val),
+                0 => {
+                    self.f_gate[idx] = sigmoid(val);
+                    self.i_gate[idx] = 1.0 - self.f_gate[idx]; // coupled
+                }
+                1 => self.g_gate[idx] = val.tanh(),
+                2 => self.o_gate[idx] = sigmoid(val),
                 _ => unreachable!(),
             }
         }
@@ -267,6 +278,7 @@ impl LstmBitMixer {
         }
 
         // LSTM backward through current step only (BPTT=1)
+        // 3 gates: forget, candidate, output. Input gate coupled: i = 1 - f.
         for i in 0..hd {
             let d_o = d_h[i] * self.tanh_c[i];
             let d_tanh_c = d_h[i] * self.o_gate[i];
@@ -276,13 +288,14 @@ impl LstmBitMixer {
             let d_i = d_c * self.g_gate[i];
             let d_g = d_c * self.i_gate[i];
 
-            // Gate activation derivatives
-            let d_pre_f = d_f * self.f_gate[i] * (1.0 - self.f_gate[i]);
-            let d_pre_i = d_i * self.i_gate[i] * (1.0 - self.i_gate[i]);
+            // Coupled gate: i = 1 - f, so di/d(pre_f) = -sigmoid'(pre_f)
+            // Combined: d_pre_f = (d_f - d_i) * f * (1 - f)
+            let d_pre_f = (d_f - d_i) * self.f_gate[i] * (1.0 - self.f_gate[i]);
             let d_pre_g = d_g * (1.0 - self.g_gate[i] * self.g_gate[i]);
             let d_pre_o = d_o * self.o_gate[i] * (1.0 - self.o_gate[i]);
 
-            let d_pres = [d_pre_f, d_pre_i, d_pre_g, d_pre_o];
+            // 3 gates: forget(0), candidate(1), output(2)
+            let d_pres = [d_pre_f, d_pre_g, d_pre_o];
 
             for (gate, &dp) in d_pres.iter().enumerate() {
                 let gh = gate * hd + i;
@@ -345,8 +358,8 @@ mod tests {
     fn lstm_mixer_param_count() {
         let mixer = LstmBitMixer::new(10, 128, 0.001);
         let params = mixer.param_count();
-        // Expected: 4*(128*10 + 128*128 + 128) + 10*128 + 10
-        let expected = 4 * (128 * 10 + 128 * 128 + 128) + 10 * 128 + 10;
+        // 3 gates (coupled: i=1-f): 3*(128*10 + 128*128 + 128) + 10*128 + 10
+        let expected = 3 * (128 * 10 + 128 * 128 + 128) + 10 * 128 + 10;
         assert_eq!(params, expected, "param count mismatch");
     }
 

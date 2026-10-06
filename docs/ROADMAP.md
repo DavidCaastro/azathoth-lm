@@ -72,7 +72,7 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 
 | # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| S1 | LSTM: coupled gates (i=1-f) | -0.00 to -0.01 | Low | -25% params, stabilizes cell state. cmix uses it. Prerequisite. |
+| ~~S1~~ | ~~LSTM: coupled gates (i=1-f)~~ | **+0.0033 (neutral)** | ~~Low~~ | **DONE (R35).** -25% params (67K→50K), +15% speed (137→158 B/s). Prerequisite confirmed. |
 | S2 | LSTM: LayerNorm | -0.005 to -0.015 | Med | Per-gate normalization with learnable gamma/beta. Prerequisite for BPTT>1. |
 | S3 | LSTM: BPTT=8 (1 full byte) | -0.02 to -0.05 | High | **Gap #1 vs cmix.** Needs Adam optimizer + grad clip. First real temporal learning. |
 | S4 | WordModel (case-folded + word-pair) | -0.005 to -0.015 | Med | Only model type we're missing that every top compressor uses. Gleipnir case-folds to "prevent halving evidence." |
@@ -139,6 +139,7 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | R32 | G1d 0.1B checkpoint eval | +0.0693 enwik8, +0.3324 samba | **KILLED** |
 | R33 | CM scaling A1 Phase 1 | +0.0027 BPB 100KB (neutral on text) | **DONE** |
 | R34 | Roadmap audit + 5-thread research | LSTM depth is #1 gap, not CM count | **DONE** |
+| S1 | LSTM: coupled gates (i=1-f) | +0.0033 neutral, -25% params, +15% speed | **DONE** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 

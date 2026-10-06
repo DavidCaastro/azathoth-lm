@@ -45,6 +45,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | R27 — Embedding surgery center0.3 (100KB) | **1.1895** | -0.0282 additional, zero runtime cost |
 | R33 — CM scaling A1 Phase 1 (10KB) | 1.2138 | +3 models (sparse+indirect), -0.0042 vs baseline |
 | R33 — CM scaling A1 Phase 1 (100KB) | 1.1922 | +0.0027 vs 1.1895 baseline, neutral on text |
+| R35 — S1 coupled gates (100KB) | 1.1955 | +0.0033 neutral, -25% params, +15% speed. Prerequisite for S2/S3. |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
