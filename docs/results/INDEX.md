@@ -4,16 +4,16 @@
 
 BPB is a vector, not a scalar. See R28 for justification.
 
-### Current Composite Baseline (Silesia T2: 12 files, 10KB, with surgery)
+### Current Composite Baseline (Silesia T2: 12 files, 10KB, S3 BPTT=8 + surgery)
 
 ```
-Composite BPB: mean=2.3456 | sigma=1.6269 | worst=6.1083 (sao)
-  Text-like mean:  1.1725 (6 files)
-  Binary mean:     3.5186 (6 files)
+Composite BPB: mean=2.1907 | sigma=1.5795 | worst=6.0447 (sao)
+  Text-like mean:  1.1288 (6 files)
+  Binary mean:     3.2526 (6 files)
 ```
 
-Surgery improves 11/12 files. Only reymont (+0.0063) degrades marginally.
-Largest gains on structured data: osdb (-0.0652), x-ray (-0.0608), mozilla (-0.0446).
+S1+S2+S3 improves all 12 files vs pre-S1 baseline. Largest gains on
+binary data: x-ray (-0.1798), mr (-0.1155), mozilla (-0.0930).
 
 ### Acceptance Rule
 
@@ -89,15 +89,13 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 
 ### Current Best — Composite (Tier 1: 5 files, 10KB each)
 
+Note: T1 not yet re-evaluated with S3. Values below are pre-S1 with surgery.
+
 | Metric | With surgery | Pre-surgery | Delta | Verdict |
 |---|---|---|---|---|
 | **mean** | **1.5213** | 1.5595 | **-0.0382** | DOWN |
 | **sigma** | **0.2814** | 0.2923 | **-0.0109** | DOWN |
 | **worst** | **1.9045** (OEIS) | 1.9596 | **-0.0551** | DOWN |
-
-Surgery center0.3 is a **universal improvement**: all three composite
-metrics improve across all 5 domains (text, code, binary, numerical).
-Largest gain on OEIS numerical data (-0.0551), smallest on enwik8 text (-0.0228).
 
 #### Tier 1 Detail (with emb surgery center0.3)
 
@@ -109,15 +107,15 @@ Largest gain on OEIS numerical data (-0.0551), smallest on enwik8 text (-0.0228)
 | mozilla (10KB) | Binary | **1.7227** | 1.7673 | -0.0446 |
 | OEIS (10KB) | Numerical | **1.9045** | 1.9596 | -0.0551 |
 
-### Full Silesia Composite (Tier 2: 12 files, 10KB, with surgery)
+### Full Silesia Composite (Tier 2: 12 files, 10KB, S3 + surgery)
 
-| Metric | With surgery | Pre-surgery | Delta | Verdict |
+| Metric | S3 + surgery | Pre-S1 surgery | Delta | Verdict |
 |---|---|---|---|---|
-| **mean** | **2.3456** | 2.3735 | **-0.0279** | DOWN |
-| **sigma** | **1.6269** | 1.6339 | **-0.0070** | DOWN |
-| **worst** | **6.1083** (sao) | 6.1175 | **-0.0092** | DOWN |
-| text-like mean | 1.1725 | 1.1914 | -0.0189 | DOWN |
-| binary mean | 3.5186 | 3.5556 | -0.0370 | DOWN |
+| **mean** | **2.1907** | 2.3456 | **-0.1549** | DOWN |
+| **sigma** | **1.5795** | 1.6269 | **-0.0474** | DOWN |
+| **worst** | **6.0447** (sao) | 6.1083 | **-0.0636** | DOWN |
+| text-like mean | 1.1288 | 1.1725 | -0.0437 | DOWN |
+| binary mean | 3.2526 | 3.5186 | -0.2660 | DOWN |
 
 ### Current Best — enwik8 (literature comparability only)
 
@@ -138,24 +136,24 @@ Largest gain on OEIS numerical data (-0.0551), smallest on enwik8 text (-0.0228)
 Full analysis in `docs/research/r25-silesia-evaluation.md` (pre-surgery)
 and `docs/research/r30-frontier-research-roadmap-reform.md` (with surgery).
 
-| File | Type | BPB (surgery) | BPB (pre) | Delta |
+| File | Type | BPB (S3) | BPB (pre-S1) | Delta |
 |---|---|---|---|---|
-| xml | Structured markup | **0.5689** | 0.5886 | -0.0197 |
-| nci | Chemical data | **0.5913** | 0.5949 | -0.0036 |
-| samba | Source code (C) | **1.1846** | 1.2143 | -0.0297 |
-| reymont | Polish text | 1.5172 | 1.5109 | +0.0063 |
-| dickens | English text | **1.5766** | 1.6154 | -0.0388 |
-| webster | English dict | **1.5967** | 1.6241 | -0.0274 |
-| mozilla | Executable | **1.7227** | 1.7673 | -0.0446 |
-| mr | Medical image | **2.0466** | 2.0639 | -0.0173 |
-| ooffice | Office binary | **2.6394** | 2.6643 | -0.0249 |
-| osdb | MySQL database | **4.3301** | 4.3953 | -0.0652 |
-| x-ray | Medical X-ray | **4.2643** | 4.3251 | -0.0608 |
-| sao | Astronomy SAO | **6.1083** | 6.1175 | -0.0092 |
-| **Mean (all 12)** | | **2.3456** | 2.3735 | -0.0279 |
-| **σ (all 12)** | | **1.6269** | 1.6339 | -0.0070 |
-| **Text-like mean (6)** | | **1.1725** | 1.1914 | -0.0189 |
-| **Binary mean (6)** | | **3.5186** | 3.5556 | -0.0370 |
+| xml | Structured markup | **0.5166** | 0.5689 | -0.0523 |
+| nci | Chemical data | **0.5303** | 0.5913 | -0.0610 |
+| samba | Source code (C) | **1.1432** | 1.1846 | -0.0414 |
+| reymont | Polish text | **1.4700** | 1.5172 | -0.0472 |
+| dickens | English text | **1.5424** | 1.5766 | -0.0342 |
+| webster | English dict | **1.5700** | 1.5967 | -0.0267 |
+| mozilla | Executable | **1.6297** | 1.7227 | -0.0930 |
+| mr | Medical image | **1.9311** | 2.0466 | -0.1155 |
+| ooffice | Office binary | **2.5624** | 2.6394 | -0.0770 |
+| osdb | MySQL database | **4.2632** | 4.3301 | -0.0669 |
+| x-ray | Medical X-ray | **4.0845** | 4.2643 | -0.1798 |
+| sao | Astronomy SAO | **6.0447** | 6.1083 | -0.0636 |
+| **Mean (all 12)** | | **2.1907** | 2.3456 | -0.1549 |
+| **σ (all 12)** | | **1.5795** | 1.6269 | -0.0474 |
+| **Text-like mean (6)** | | **1.1288** | 1.1725 | -0.0437 |
+| **Binary mean (6)** | | **3.2526** | 3.5186 | -0.2660 |
 
 ### Cross-Domain (adversarial — 10KB)
 
