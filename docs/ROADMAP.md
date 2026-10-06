@@ -1,7 +1,7 @@
 # Roadmap — azathoth-lm
 
 **Date**: 2026-10-06
-**Current best (enwik8)**: 1.1895 BPB (100KB, literature ref only)
+**Current best (enwik8)**: 1.1843 BPB (100KB, literature ref only)
 **Current composite (T1)**: mean=1.5213 | sigma=0.2814 | worst=1.9045 (5 files, with surgery)
 **Current composite (T2)**: mean=2.3456 | sigma=1.6269 | worst=6.1083 (12 Silesia files, with surgery)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
@@ -22,7 +22,7 @@ Principles:
 ## Current Position
 
 ```
-1.19  azathoth-lm   (0.1B RWKV + 12 CM + match + hier LSTM + emb surgery)
+1.18  azathoth-lm   (0.1B RWKV + 12 CM + match + hier LSTM BPTT=8 + emb surgery)
 1.27  PAQ8px v217   (200+ byte-level CM, 3-layer mixer, universal)
 1.19  NNCP v3       (199M Transformer-XL)
 1.17  cmix v21      (2077 CM + 2x200 LSTM BPTT=100, universal)
@@ -31,7 +31,7 @@ Principles:
 0.94  Nacrith       (135M SmolLM2 + CM + Hedge mixer, universal)
 ```
 
-Gap to target: ~0.19 BPB. Tied with NNCP, below PAQ8px.
+Gap to target: ~0.18 BPB. Below NNCP (1.19), below PAQ8px.
 
 ### Architecture
 
@@ -74,7 +74,7 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 |---|---|---|---|---|
 | ~~S1~~ | ~~LSTM: coupled gates (i=1-f)~~ | **+0.0033 (neutral)** | ~~Low~~ | **DONE (R35).** -25% params (67K→50K), +15% speed (137→158 B/s). Prerequisite confirmed. |
 | ~~S2~~ | ~~LSTM: LayerNorm~~ | **-0.0057 (100KB)** | ~~Med~~ | **DONE (R36).** Per-gate LN, +768 params. -0.0510 on 10KB (early boost). Prerequisite confirmed. |
-| S3 | LSTM: BPTT=8 (1 full byte) | -0.02 to -0.05 | High | **Gap #1 vs cmix.** Needs Adam optimizer + grad clip. First real temporal learning. |
+| ~~S3~~ | ~~LSTM: BPTT=8 (1 full byte)~~ | **-0.0055 (100KB)** | ~~High~~ | **DONE (R37).** Adam(beta1=0.02, beta2=0.9999) + grad clip. -0.0017 on 10KB. 148 B/s (-4%). First temporal learning. |
 | S4 | WordModel (case-folded + word-pair) | -0.005 to -0.015 | Med | Only model type we're missing that every top compressor uses. Gleipnir case-folds to "prevent halving evidence." |
 
 ### Tier A — High impact
@@ -141,27 +141,27 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | R34 | Roadmap audit + 5-thread research | LSTM depth is #1 gap, not CM count | **DONE** |
 | S1 | LSTM: coupled gates (i=1-f) | +0.0033 neutral, -25% params, +15% speed | **DONE** |
 | S2 | LSTM: LayerNorm per-gate | -0.0057 (100KB), -0.0510 (10KB early boost) | **DONE** |
+| S3 | LSTM: BPTT=8 + Adam(beta1≈0) | -0.0055 (100KB), -0.0017 (10KB). 148 B/s. | **DONE** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
 ## Remaining Trajectory (enwik8, from 1.1895)
 
-Optimistic (research-backed estimates from R34):
+Optimistic (research-backed estimates, updated post-S3):
 ```
-1.1895  current
-1.17    + LSTM stack: coupled gates + LayerNorm + BPTT=8 (-0.02)
-1.15    + WordModel + APM/SSE (-0.02)
-1.12    + Tweedie + match improvements + higher orders (-0.03)
-1.08    + BPTT=32 + 2 layers + WRT (-0.04)
+1.1843  current (S1+S2+S3 complete: -0.0079 cumulative)
+1.17    + WordModel + APM/SSE (-0.015)
+1.14    + match improvements + higher orders (-0.03)
+1.10    + BPTT=32 + 2 layers + WRT (-0.04)
 1.05    ceiling without GPU (optimistic)
 ```
 
 Conservative:
 ```
-1.1895  current
-1.17    + LSTM improvements (-0.02)
-1.15    + WordModel + APM (-0.02)
-1.13    + full enwik8 convergence (-0.02)
+1.1843  current
+1.17    + WordModel + APM (-0.015)
+1.15    + full enwik8 convergence (-0.02)
+1.13    ceiling without GPU (conservative)
 ```
 
 Sub-1.0 requires domain-tuned neural model (GPU) or breakthrough in

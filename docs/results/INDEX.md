@@ -48,6 +48,8 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | R35 — S1 coupled gates (100KB) | 1.1955 | +0.0033 neutral, -25% params, +15% speed. Prerequisite for S2/S3. |
 | R36 — S2 LayerNorm (10KB) | **1.1686** | -0.0510 vs S1, strong early learning boost |
 | R36 — S2 LayerNorm (100KB) | **1.1898** | -0.0057 vs S1, +768 params (+1.5%). Prerequisite for S3. |
+| R37 — S3 BPTT=8 (10KB) | **1.1669** | -0.0017 vs S2. First temporal learning. |
+| R37 — S3 BPTT=8 (100KB) | **1.1843** | -0.0055 vs S2. Adam(beta1=0.02). 148 B/s. New best. |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
@@ -68,7 +70,8 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 1.25  azathoth-lm LSTM hybrid CM+RWKV (100KB)
 1.23  azathoth-lm hierarchical groups (100KB)
 1.22  azathoth-lm hierarchical + match model (100KB)
-1.19  azathoth-lm + emb surgery center0.3 (100KB) ← CURRENT BEST
+1.19  azathoth-lm + emb surgery center0.3 (100KB)
+1.18  azathoth-lm + S1+S2+S3 LSTM stack (100KB) ← CURRENT BEST
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
 1.17  cmix        (2077 models + LSTM)
@@ -120,7 +123,7 @@ Largest gain on OEIS numerical data (-0.0551), smallest on enwik8 text (-0.0228)
 
 | Metric | Value | Date |
 |---|---|---|
-| **BPB emb-surgery center0.3 (enwik8 100KB)** | **1.1895** | **2026-10-06** |
+| **BPB S3 BPTT=8 (enwik8 100KB)** | **1.1843** | **2026-10-06** |
 | BPB hierarchical+match (enwik8 100KB) | 1.2177 | 2026-10-06 |
 | BPB hierarchical only (enwik8 100KB) | 1.2272 | 2026-10-06 |
 | BPB LSTM flat hybrid (enwik8 100KB) | 1.2549 | 2026-10-06 |
@@ -177,6 +180,9 @@ See `docs/research/r23-cross-domain-validation.md`.
 | + hierarchical groups | 1.2502 | 1.2272 | 2026-10-06 |
 | + match model | 1.2408 | 1.2177 | 2026-10-06 |
 | + emb surgery center0.3 | — | **1.1895** | 2026-10-06 |
+| + S1 coupled gates | 1.2196 | 1.1955 | 2026-10-06 |
+| + S2 LayerNorm | 1.1686 | 1.1898 | 2026-10-06 |
+| + S3 BPTT=8 + Adam | **1.1669** | **1.1843** | 2026-10-06 |
 
 ## Phase 0 Details
 
