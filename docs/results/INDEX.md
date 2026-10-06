@@ -4,16 +4,16 @@
 
 BPB is a vector, not a scalar. See R28 for justification.
 
-### Current Composite Baseline (Silesia 12 files, 10KB, pre-surgery)
+### Current Composite Baseline (Silesia T2: 12 files, 10KB, with surgery)
 
 ```
-Composite BPB: mean=2.2901 | sigma=1.7223 | worst=6.1175 (sao)
-  Text-like mean:  1.0247 (6 files)
-  Binary mean:     3.5556 (6 files)
+Composite BPB: mean=2.3456 | sigma=1.6269 | worst=6.1083 (sao)
+  Text-like mean:  1.1725 (6 files)
+  Binary mean:     3.5186 (6 files)
 ```
 
-**Note**: Composite baseline needs re-measurement with embedding surgery (center0.3).
-The enwik8-only "1.1895 best" is a single-corpus number, not the composite.
+Surgery improves 11/12 files. Only reymont (+0.0063) degrades marginally.
+Largest gains on structured data: osdb (-0.0652), x-ray (-0.0608), mozilla (-0.0446).
 
 ### Acceptance Rule
 
@@ -100,13 +100,15 @@ Largest gain on OEIS numerical data (-0.0551), smallest on enwik8 text (-0.0228)
 | mozilla (10KB) | Binary | **1.7227** | 1.7673 | -0.0446 |
 | OEIS (10KB) | Numerical | **1.9045** | 1.9596 | -0.0551 |
 
-### Full Silesia Composite (Tier 2, pre-surgery baseline)
+### Full Silesia Composite (Tier 2: 12 files, 10KB, with surgery)
 
-| Metric | Value | Date | Note |
-|---|---|---|---|
-| Composite mean (12 files) | 2.2901 | 2026-10-06 | Pre-surgery |
-| Composite sigma (12 files) | 1.7223 | 2026-10-06 | Pre-surgery |
-| Composite worst | 6.1175 (sao) | 2026-10-06 | Pre-surgery |
+| Metric | With surgery | Pre-surgery | Delta | Verdict |
+|---|---|---|---|---|
+| **mean** | **2.3456** | 2.3735 | **-0.0279** | DOWN |
+| **sigma** | **1.6269** | 1.6339 | **-0.0070** | DOWN |
+| **worst** | **6.1083** (sao) | 6.1175 | **-0.0092** | DOWN |
+| text-like mean | 1.1725 | 1.1914 | -0.0189 | DOWN |
+| binary mean | 3.5186 | 3.5556 | -0.0370 | DOWN |
 
 ### Current Best — enwik8 (literature comparability only)
 
@@ -122,29 +124,29 @@ Largest gain on OEIS numerical data (-0.0551), smallest on enwik8 text (-0.0228)
 | MB RAM (Q8 + CM + match) | **~240** | **2026-10-06** |
 | BPB/Mparam | 0.0122 | 2026-10-06 |
 
-### Cross-Domain (Silesia Corpus — 10KB samples)
+### Cross-Domain (Silesia Corpus — 10KB samples, with surgery)
 
-Full analysis in `docs/research/r25-silesia-evaluation.md`.
+Full analysis in `docs/research/r25-silesia-evaluation.md` (pre-surgery)
+and `docs/research/r30-frontier-research-roadmap-reform.md` (with surgery).
 
-| File | Type | BPB (10KB) | B/s | Match hits% |
+| File | Type | BPB (surgery) | BPB (pre) | Delta |
 |---|---|---|---|---|
-| xml | Structured markup | **0.5886** | 54 | 98% |
-| nci | Chemical data | **0.5949** | 56 | 100% |
-| samba | Source code (C) | **1.2143** | 112 | 84% |
-| reymont | Polish text | 1.5109 | 53 | 79% |
-| dickens | English text | 1.6154 | 132 | 75% |
-| webster | English dict | 1.6241 | 91 | 78% |
-| mozilla | Executable | 1.7673 | 42 | 88% |
-| mr | Medical image | 2.0639 | 37 | 100% |
-| ooffice | Office binary | 2.6643 | 30 | 26% |
-| osdb | MySQL database | 4.3953 | 30 | 45% |
-| x-ray | Medical X-ray | 4.3251 | 24 | 4% |
-| sao | Astronomy SAO | 6.1175 | 25 | 26% |
-| **Mean (all 12)** | | **2.2901** | **57** | |
-| **σ (all 12)** | | **1.7223** | | |
-| **Mean (text-like 6)** | | **1.0247** | | |
-| **Mean (binary 6)** | | **3.5556** | | |
-| **Weissman (mean)** | | **4.9** | | |
+| xml | Structured markup | **0.5689** | 0.5886 | -0.0197 |
+| nci | Chemical data | **0.5913** | 0.5949 | -0.0036 |
+| samba | Source code (C) | **1.1846** | 1.2143 | -0.0297 |
+| reymont | Polish text | 1.5172 | 1.5109 | +0.0063 |
+| dickens | English text | **1.5766** | 1.6154 | -0.0388 |
+| webster | English dict | **1.5967** | 1.6241 | -0.0274 |
+| mozilla | Executable | **1.7227** | 1.7673 | -0.0446 |
+| mr | Medical image | **2.0466** | 2.0639 | -0.0173 |
+| ooffice | Office binary | **2.6394** | 2.6643 | -0.0249 |
+| osdb | MySQL database | **4.3301** | 4.3953 | -0.0652 |
+| x-ray | Medical X-ray | **4.2643** | 4.3251 | -0.0608 |
+| sao | Astronomy SAO | **6.1083** | 6.1175 | -0.0092 |
+| **Mean (all 12)** | | **2.3456** | 2.3735 | -0.0279 |
+| **σ (all 12)** | | **1.6269** | 1.6339 | -0.0070 |
+| **Text-like mean (6)** | | **1.1725** | 1.1914 | -0.0189 |
+| **Binary mean (6)** | | **3.5186** | 3.5556 | -0.0370 |
 
 ### Cross-Domain (adversarial — 10KB)
 
@@ -398,11 +400,10 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
 - **R26**: MoE architecture + direct weight manipulation research.
   See `docs/research/r26-moe-architecture-research.md`.
 
-### Next
-- **R28 Composite baseline**: Re-run Tier 1 eval with emb surgery to establish composite baseline
-- **Validate emb surgery on binary**: center0.3 untested on Silesia binary files
-- **Indirect context models (ICM)**: Target bits 3-5 bottleneck (est. -0.02 to -0.05)
-- **APM post-mixer correction**: Adaptive probability map after LSTM (est. -0.01)
-- **Match model upgrade**: Checksums, LRU eviction, confidence weighting
-- Full enwik8 evaluation with best config (~8 days)
-- Full SA-PPM with suffix array
+### Next (R30 data-driven priorities)
+- **N1 — Scale CM to ~25 models**: ICM, SparseModel, WordModel, RecordModel. Biggest gap vs competition (9 vs 27-2077). Est. -0.05 to -0.10
+- **N2 — APM/SSE post-LSTM chain**: Parallel APMs averaged, not chained. Est. -0.01 to -0.04
+- **N3 — LSTM improvements**: Coupled gates (i=1-f), layer norm, L2 reg. Est. -0.01 to -0.03
+- **N4 — Hedge mixer experiment**: Multiplicative weights (Nacrith). Quick A/B test
+- **M1 — Full SA-PPM**: Suffix array for optimal matching. Est. -0.10 to -0.30
+- **M2 — Full enwik8**: Validate 100KB→100MB extrapolation (~8 days)

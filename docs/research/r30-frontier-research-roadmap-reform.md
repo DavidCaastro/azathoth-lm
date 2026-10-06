@@ -1,7 +1,7 @@
 # R30: Frontier Research + Roadmap Reformulation
 
 **Date**: 2026-10-06
-**Status**: In Progress (awaiting Silesia T2 results)
+**Status**: Complete
 **Purpose**: Deep research on compression state of the art (2026) combined
 with fresh Silesia evaluation to reformulate the roadmap with data-driven
 priorities and composite metric gate.
@@ -133,28 +133,57 @@ Threshold: `max(0, 12 - log2(length))` confirmations needed.
 
 ## Part 3: Silesia T2 Evaluation (with surgery center0.3)
 
-*Results pending — eval running. Will be filled when complete.*
-
 | File | Type | BPB (surgery) | BPB (R25 pre-surgery) | Delta |
 |---|---|---|---|---|
-| xml | Markup | 0.5689 | 0.5886 | -0.0197 |
-| nci | Chemical | 0.5913 | 0.5949 | -0.0036 |
-| samba | Code | — | 1.2143 | — |
-| reymont | Polish | — | 1.5109 | — |
-| dickens | English | — | 1.6154 | — |
-| webster | Dict | — | 1.6241 | — |
-| mozilla | Exe | — | 1.7673 | — |
-| mr | MRI | — | 2.0639 | — |
-| ooffice | DLL | — | 2.6643 | — |
-| osdb | MySQL | — | 4.3953 | — |
-| x-ray | X-ray | — | 4.3251 | — |
-| sao | Astro | — | 6.1175 | — |
+| xml | Markup | **0.5689** | 0.5886 | -0.0197 |
+| nci | Chemical | **0.5913** | 0.5949 | -0.0036 |
+| samba | Code | **1.1846** | 1.2143 | -0.0297 |
+| reymont | Polish | 1.5172 | 1.5109 | +0.0063 |
+| dickens | English | **1.5766** | 1.6154 | -0.0388 |
+| webster | Dict | **1.5967** | 1.6241 | -0.0274 |
+| mozilla | Exe | **1.7227** | 1.7673 | -0.0446 |
+| mr | MRI | **2.0466** | 2.0639 | -0.0173 |
+| ooffice | DLL | **2.6394** | 2.6643 | -0.0249 |
+| osdb | MySQL | **4.3301** | 4.3953 | -0.0652 |
+| x-ray | X-ray | **4.2643** | 4.3251 | -0.0608 |
+| sao | Astro | **6.1083** | 6.1175 | -0.0092 |
+
+### T2 Composite
+
+| Metric | With surgery | Pre-surgery | Delta | Verdict |
+|---|---|---|---|---|
+| **mean** | **2.3456** | 2.3735 | **-0.0279** | DOWN |
+| **sigma** | **1.6269** | 1.6339 | **-0.0070** | DOWN |
+| **worst** | **6.1083** (sao) | 6.1175 | **-0.0092** | DOWN |
+| text-like mean | 1.1725 | 1.1914 | -0.0189 | DOWN |
+| binary mean | 3.5186 | 3.5556 | -0.0370 | DOWN |
+
+**Surgery improves 11 of 12 files.** Only reymont (Polish text) degrades
+marginally (+0.0063). Largest gains on structured data: osdb (-0.0652),
+x-ray (-0.0608), mozilla (-0.0446). Surgery helps binary MORE than text.
+
+### Bottleneck Analysis (from T2 results)
+
+**Where we're strong** (BPB < 1.5):
+- xml (0.57), nci (0.59), samba (1.18) — structured/repetitive, CM excels
+
+**Where we're decent** (1.5-2.0):
+- reymont (1.52), dickens (1.58), webster (1.60), mozilla (1.72) — text+binary
+
+**Where we're weak** (BPB > 2.0):
+- mr (2.05), ooffice (2.64) — binary with internal structure
+- osdb (4.33), x-ray (4.26), sao (6.11) — near-random / highly structured binary
+
+**The sigma is dominated by the 3 worst files** (osdb, x-ray, sao). These are
+all binary/numerical data where RWKV contributes near-zero and CM hash tables
+have massive collisions. A Record Model would directly target these.
 
 ## Part 4: Reformulated Roadmap
 
-*To be completed after Silesia results.*
+Based on T2 Silesia results + frontier research, priorities reformulated
+with composite metric awareness.
 
-### Preliminary Priority Ranking (based on research)
+### Priority Ranking (data-driven)
 
 **Tier A — Highest impact, implement next:**
 1. **Scale CM from 9 to ~25 models** — add SparseModel, IndirectModel (ICM),

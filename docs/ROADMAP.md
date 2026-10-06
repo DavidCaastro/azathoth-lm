@@ -3,6 +3,7 @@
 **Date**: 2026-10-06
 **Current best (enwik8)**: 1.1895 BPB (100KB, literature ref only)
 **Current composite (T1)**: mean=1.5213 | sigma=0.2814 | worst=1.9045 (5 files, with surgery)
+**Current composite (T2)**: mean=2.3456 | sigma=1.6269 | worst=6.1083 (12 Silesia files, with surgery)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
 **Primary metric**: Composite BPB (mean, sigma, worst) — see R28
 
@@ -61,29 +62,39 @@ and **full SA-PPM** (suffix array for optimal matching).
 
 ## What's Next
 
-### Near-term (est. impact on composite)
+### Tier A — Highest impact (implement next)
 
 | # | Action | Est. Delta | Risk | Rationale |
 |---|---|---|---|---|
-| N1 | ICM for bits 3-5 | -0.02 to -0.05 | Low | Character identity bottleneck in text. PAQ8px proven technique. |
-| N2 | APM post-mixer | -0.01 | Low | Adaptive probability map after LSTM. Nearly free compute. |
-| N3 | Match model upgrade | -0.01 to -0.03 | Low | Checksums, LRU, confidence weighting. Reduce collision damage. |
-| N4 | LSTM error-conditional lr | -0.005 to -0.01 | Low | Decay lr when error low, restore on regime change. PAQ8px v217. |
+| A1 | Scale CM 9→25+ models | -0.05 to -0.10 | High | Biggest gap vs competition. Gleipnir=27 CM, no neural→1.27. Add ICM, SparseModel, WordModel, RecordModel, higher-order match. |
+| A2 | APM/SSE post-LSTM chain | -0.01 to -0.04 | Low | Parallel APMs averaged (NOT chained). Proven in every top compressor. |
 
-### Medium-term
+### Tier B — Medium impact, low effort
 
 | # | Action | Est. Delta | Risk | Rationale |
 |---|---|---|---|---|
-| M1 | Full SA-PPM (suffix array) | -0.10 to -0.30 | High | Unifies all context matching. Largest remaining single win. |
-| M2 | Record model (tabular data) | -0.5 to -1.0 on numerical | Med | Detect fixed-length records, exploit column redundancy. OEIS/CSV. |
-| M3 | Full enwik8 (100MB) | unknown | Low | Validate 100KB→100MB extrapolation. ~8 days compute. |
+| B1 | LSTM improvements | -0.01 to -0.03 | Low | Coupled gates (i=1-f), layer norm, L2 reg. Direct code changes. cmix uses all three. |
+| B2 | Hedge mixer experiment | -0.005 to -0.02 | Low | Multiplicative weights (Nacrith). Quick A/B test vs current SGD. |
+
+### Tier C — Medium impact, medium effort
+
+| # | Action | Est. Delta | Risk | Rationale |
+|---|---|---|---|---|
+| C1 | ISSE chains | -0.02 to -0.04 | Med | Indirect secondary symbol estimation. Gleipnir's lightweight refinement. |
+| C2 | Micro-diffusion denoising | -0.01 to -0.03 | Med | Parameter-free post-processing. Binary tree byte decomposition + Tweedie correction. |
+
+### Tier D — High impact, high effort
+
+| # | Action | Est. Delta | Risk | Rationale |
+|---|---|---|---|---|
+| D1 | Full SA-PPM (suffix array) | -0.10 to -0.30 | High | Unifies all context matching. ~400 MB RAM for enwik8. |
 
 ### Blocked
 
 | # | Action | Blocker |
 |---|---|---|
-| B1 | Domain checkpoint (fine-tune RWKV) | Requires GPU |
-| B2 | Larger neural model (0.4B+) | No checkpoint outperforms 0.1B on enwik8 |
+| E1 | Domain checkpoint (fine-tune RWKV) | Requires GPU |
+| E2 | Larger neural model (0.4B+) | No checkpoint outperforms 0.1B on enwik8 |
 
 ## Completed Summary
 
@@ -100,6 +111,7 @@ and **full SA-PPM** (suffix array for optimal matching).
 | R27 | Embedding surgery | -0.0282 BPB, zero cost | **DONE** |
 | R28 | Composite BPB metric | (mean,σ,worst) primary | **DONE** |
 | R29 | OEIS numerical regime | 1.9045 BPB, 5th T1 file | **DONE** |
+| R30 | Frontier research + roadmap reform | T2 surgery + data-driven priorities | **DONE** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
@@ -108,20 +120,21 @@ Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 Optimistic:
 ```
 1.1895  current
-1.16    + ICM for bits 3-5 (-0.03)
-1.15    + APM + match upgrade (-0.01)
-1.12    + full enwik8 (more history, LSTM convergence)
-1.00    + full SA-PPM with suffix array (-0.12)
+1.13    + CM scaling 9→25 models (-0.06)
+1.10    + APM/SSE chain + LSTM improvements (-0.03)
+1.08    + full enwik8 (more history, LSTM convergence)
+1.00    + full SA-PPM with suffix array (-0.08)
 ```
 
 Conservative:
 ```
 1.1895  current
-1.17    + ICM + APM (-0.02)
-1.15    + full enwik8 (-0.02)
+1.15    + CM scaling + APM (-0.04)
+1.13    + full enwik8 (-0.02)
 ```
 
 < 1.0 requires SA-PPM or larger neural predictor (blocked by GPU).
+See R30 for frontier research justifying these estimates.
 
 ## Constraints
 
