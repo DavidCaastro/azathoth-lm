@@ -12,7 +12,7 @@ use crate::domain::coder::{Cdf, RangeEncoder, RangeDecoder};
 use crate::domain::cm::ContextMixer;
 use crate::domain::bridge::{ByteBridge, byte_probs_to_bit_preds};
 use crate::domain::match_model::MatchModel;
-use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot};
+use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot, HybridLogger, HybridLogSnapshot};
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
 
@@ -42,7 +42,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--match] [--log FILE.jsonl]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -392,6 +392,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut use_match = false;
     let mut lstm_hidden: usize = 128;
     let mut lstm_lr: f32 = 0.002;
+    let mut log_path: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -405,6 +406,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--match" => { use_match = true; }
             "--lstm-hidden" => { i += 1; lstm_hidden = args[i].parse().unwrap(); use_lstm = true; }
             "--lstm-lr" => { i += 1; lstm_lr = args[i].parse().unwrap(); use_lstm = true; }
+            "--log" => { i += 1; log_path = Some(args[i].clone()); }
             _ => {}
         }
         i += 1;
@@ -461,6 +463,8 @@ fn cmd_hybrid_eval(args: &[String]) {
     eprintln!("[hybrid] CM: 9 orders, {:.1} MB | mixer: {} | trie: {} nodes{}",
               cm_mem_mb, mixer_str, bridge.node_count(),
               if use_match { format!(" | match: {:.1} MB", match_mem_mb) } else { String::new() });
+
+    let mut logger = log_path.as_ref().map(|p| HybridLogger::new(p, total_bytes));
 
     let mut state = Rwkv7State::new(&model.config);
     let mut scratch = model.create_scratch();
@@ -543,14 +547,24 @@ fn cmd_hybrid_eval(args: &[String]) {
                 for &byte in tok_bytes {
                     let byte_probs = bridge.byte_probs();
                     let rwkv_bit_preds = byte_probs_to_bit_preds(&byte_probs, byte);
-                    let bits = if let Some(ref mm) = match_model {
-                        let (match_byte_probs, _match_len) = mm.predict();
+                    let mut bit_costs = [0.0f64; 8];
+                    let (bits, match_len) = if let Some(ref mm) = match_model {
+                        let (match_byte_probs, ml) = mm.predict();
                         let match_bit_preds = byte_probs_to_bit_preds(&match_byte_probs, byte);
-                        cm.process_byte_with_externals(byte, &[&rwkv_bit_preds, &match_bit_preds])
+                        let b = if logger.is_some() {
+                            cm.process_byte_with_externals_detailed(byte, &[&rwkv_bit_preds, &match_bit_preds], &mut bit_costs)
+                        } else {
+                            cm.process_byte_with_externals(byte, &[&rwkv_bit_preds, &match_bit_preds])
+                        };
+                        (b, ml)
                     } else {
-                        cm.process_byte_with_external(byte, &rwkv_bit_preds)
+                        let b = cm.process_byte_with_external(byte, &rwkv_bit_preds);
+                        (b, 0)
                     };
                     total_bits += bits;
+                    if let Some(ref mut log) = logger {
+                        log.record_byte(bits, &HybridLogSnapshot { bit_costs, match_len });
+                    }
                     if let Some(ref mut mm) = match_model {
                         mm.observe(byte);
                     }
@@ -571,14 +585,19 @@ fn cmd_hybrid_eval(args: &[String]) {
         } else {
             // First token: CM only (no RWKV context yet)
             for &byte in tok_bytes {
-                let bits = if let Some(ref mm) = match_model {
-                    let (match_byte_probs, _match_len) = mm.predict();
+                let bit_costs = [0.0f64; 8];
+                let (bits, match_len) = if let Some(ref mm) = match_model {
+                    let (match_byte_probs, ml) = mm.predict();
                     let match_bit_preds = byte_probs_to_bit_preds(&match_byte_probs, byte);
-                    cm.process_byte_with_external(byte, &match_bit_preds)
+                    let b = cm.process_byte_with_external(byte, &match_bit_preds);
+                    (b, ml)
                 } else {
-                    cm.process_byte(byte)
+                    (cm.process_byte(byte), 0)
                 };
                 total_bits += bits;
+                if let Some(ref mut log) = logger {
+                    log.record_byte(bits, &HybridLogSnapshot { bit_costs, match_len });
+                }
                 if let Some(ref mut mm) = match_model {
                     mm.observe(byte);
                 }
@@ -606,6 +625,11 @@ fn cmd_hybrid_eval(args: &[String]) {
         eprintln!("  skipped:     {}/{} tokens ({:.1}%), {} bytes",
                   skipped_tokens, predictable, skip_pct, skipped_bytes);
     }
+    if let Some(ref mut log) = logger {
+        log.finalize();
+        eprintln!("[hybrid] log written: {}", log_path.as_ref().unwrap());
+    }
+
     eprintln!();
     eprintln!("[hybrid] reference points:");
     eprintln!("  CM standalone (100KB):   2.41 BPB");

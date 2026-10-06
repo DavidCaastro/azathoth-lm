@@ -131,13 +131,125 @@ pub fn now_barcelona() -> String {
 
 // ---- Level 2: Structured JSON-lines log ----
 
-/// Snapshot of component state for structured logging.
+/// Snapshot of component state for structured logging (baseline command).
 #[derive(Clone, Copy, Default)]
 pub struct LogSnapshot {
     pub w_ngram: f32,
     pub w_bias: f32,
     pub eff_lr: f32,
     pub ema_surprise: f32,
+}
+
+/// Snapshot for hybrid-eval structured logging.
+#[derive(Clone, Default)]
+pub struct HybridLogSnapshot {
+    /// Per-bit cost for current byte (bits 0-7, MSB first)
+    pub bit_costs: [f64; 8],
+    /// Match model longest match length (0 = no match)
+    pub match_len: usize,
+}
+
+/// Structured .jsonl logger for hybrid-eval post-analysis.
+/// Records per-byte BPB, per-bit costs, throughput, match quality.
+pub struct HybridLogger {
+    file: std::io::BufWriter<std::fs::File>,
+    interval_bytes: usize,
+    start_time: Instant,
+    // Cumulative
+    cum_bytes: usize,
+    cum_bits: f64,
+    // Window (between flushes)
+    win_bytes: usize,
+    win_bits: f64,
+    // Per-bit cost accumulators (window)
+    win_bit_costs: [f64; 8],
+    win_bit_counts: usize,
+    // Match stats (window)
+    win_match_hits: usize,
+    win_match_len_sum: usize,
+}
+
+impl HybridLogger {
+    pub fn new(path: &str, total_bytes: usize) -> Self {
+        let file = std::fs::File::create(path)
+            .unwrap_or_else(|e| panic!("cannot create log file {}: {}", path, e));
+        let interval = (total_bytes / 100).clamp(100, 100_000);
+        eprintln!("[hybrid] logging to: {}", path);
+        Self {
+            file: std::io::BufWriter::new(file),
+            interval_bytes: interval,
+            start_time: Instant::now(),
+            cum_bytes: 0,
+            cum_bits: 0.0,
+            win_bytes: 0,
+            win_bits: 0.0,
+            win_bit_costs: [0.0; 8],
+            win_bit_counts: 0,
+            win_match_hits: 0,
+            win_match_len_sum: 0,
+        }
+    }
+
+    /// Record one byte's total cost and per-bit breakdown.
+    pub fn record_byte(&mut self, byte_bits: f64, snap: &HybridLogSnapshot) {
+        self.cum_bytes += 1;
+        self.cum_bits += byte_bits;
+        self.win_bytes += 1;
+        self.win_bits += byte_bits;
+
+        for i in 0..8 {
+            self.win_bit_costs[i] += snap.bit_costs[i];
+        }
+        self.win_bit_counts += 1;
+
+        if snap.match_len > 0 {
+            self.win_match_hits += 1;
+            self.win_match_len_sum += snap.match_len;
+        }
+
+        if self.win_bytes >= self.interval_bytes {
+            self.flush();
+        }
+    }
+
+    pub fn finalize(&mut self) {
+        if self.win_bytes > 0 {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        let elapsed = self.start_time.elapsed().as_secs_f64();
+        let bpb = self.cum_bits / self.cum_bytes.max(1) as f64;
+        let bpb_w = self.win_bits / self.win_bytes.max(1) as f64;
+        let bps = self.cum_bytes as f64 / elapsed.max(0.001);
+        let ts = now_barcelona();
+
+        // Average per-bit costs for this window
+        let n = self.win_bit_counts.max(1) as f64;
+        let bc: Vec<String> = self.win_bit_costs.iter()
+            .map(|c| format!("{:.4}", c / n))
+            .collect();
+
+        let avg_match = if self.win_match_hits > 0 {
+            self.win_match_len_sum as f64 / self.win_match_hits as f64
+        } else {
+            0.0
+        };
+
+        let _ = writeln!(self.file,
+            "{{\"ts\":\"{}\",\"sec\":{:.1},\"bytes\":{},\"bpb\":{:.6},\"bpb_w\":{:.6},\"bps\":{:.0},\"bit_costs\":[{}],\"match_hits\":{},\"match_avg_len\":{:.1}}}",
+            ts, elapsed, self.cum_bytes, bpb, bpb_w, bps,
+            bc.join(","), self.win_match_hits, avg_match,
+        );
+
+        self.win_bytes = 0;
+        self.win_bits = 0.0;
+        self.win_bit_costs = [0.0; 8];
+        self.win_bit_counts = 0;
+        self.win_match_hits = 0;
+        self.win_match_len_sum = 0;
+    }
 }
 
 /// Structured .jsonl logger for post-run analysis.

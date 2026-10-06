@@ -370,20 +370,25 @@ impl ContextMixer {
 
     /// Process one byte. Returns cost in bits (-log2 of predicted probability).
     pub fn process_byte(&mut self, byte: u8) -> f64 {
-        self.process_byte_inner(byte, &[])
+        self.process_byte_inner(byte, &[], None)
     }
 
     /// Process one byte with external bit predictions (e.g. from RWKV bridge).
     /// `external_bit_preds[j]` = P(bit_j=1) from the external model, for j=0..7 (MSB first).
     /// These are added as an extra input to the mixer alongside the CM order models.
     pub fn process_byte_with_external(&mut self, byte: u8, external_bit_preds: &[f32; 8]) -> f64 {
-        self.process_byte_inner(byte, &[external_bit_preds])
+        self.process_byte_inner(byte, &[external_bit_preds], None)
     }
 
     /// Process one byte with multiple external bit prediction sources.
     /// Each entry in `externals` is a [f32; 8] of bit predictions from a different model.
     pub fn process_byte_with_externals(&mut self, byte: u8, externals: &[&[f32; 8]]) -> f64 {
-        self.process_byte_inner(byte, externals)
+        self.process_byte_inner(byte, externals, None)
+    }
+
+    /// Like process_byte_with_externals but also fills per-bit cost breakdown.
+    pub fn process_byte_with_externals_detailed(&mut self, byte: u8, externals: &[&[f32; 8]], bit_costs: &mut [f64; 8]) -> f64 {
+        self.process_byte_inner(byte, externals, Some(bit_costs))
     }
 
     /// Update CM state (history + hash tables) without measuring cost.
@@ -406,7 +411,7 @@ impl ContextMixer {
         self.history_len += 1;
     }
 
-    fn process_byte_inner(&mut self, byte: u8, externals: &[&[f32; 8]]) -> f64 {
+    fn process_byte_inner(&mut self, byte: u8, externals: &[&[f32; 8]], mut bit_costs_out: Option<&mut [f64; 8]>) -> f64 {
         let n_cm = self.models.len();
         let n_ext = externals.len();
         let total_inputs = n_cm + n_ext;
@@ -469,7 +474,11 @@ impl ContextMixer {
             };
 
             let p_correct = if bit == 1 { prediction } else { 1.0 - prediction };
-            total_bits += -(p_correct as f64).max(1e-15).log2();
+            let bit_cost = -(p_correct as f64).max(1e-15).log2();
+            total_bits += bit_cost;
+            if let Some(bc) = bit_costs_out.as_deref_mut() {
+                bc[j as usize] = bit_cost;
+            }
 
             match &mut self.mixer {
                 MixerKind::Logistic(m) => m.update(c, &self.pred_buf[..total_inputs], prediction, bit),
