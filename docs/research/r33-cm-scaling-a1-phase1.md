@@ -51,12 +51,31 @@ hash table infrastructure (FNV hash, 4-way associative buckets, recency decay).
 
 ## Configurations Tested
 
+### 10KB results
+
 | Config | Models | Groups | BPB (10KB) | Delta | Speed | CM RAM |
 |---|---|---|---|---|---|---|
 | Baseline (9 order) | 9 | 2 | 1.2180 | -- | 110 B/s | 78 MB |
 | 15 models, 4 groups | 15 | 4 | 1.3143 | +0.0963 | 111 B/s | 108 MB |
 | 15 models, 2 groups | 15 | 2 | 1.2203 | +0.0023 | 90 B/s | 108 MB |
 | **12 models, 2 groups** | **12** | **2** | **1.2138** | **-0.0042** | **113 B/s** | **86 MB** |
+
+### 100KB results (official eval)
+
+| Config | Models | BPB (100KB) | Delta | Speed |
+|---|---|---|---|---|
+| Baseline (9 order) | 9 | **1.1895** | -- | 134 B/s |
+| **12 models, 2 groups** | **12** | **1.1922** | **+0.0027** | **137 B/s** |
+
+At 100KB the 3 new models cause a marginal regression (+0.0027 BPB).
+The hash tables had more data to learn from but the sparse/indirect models
+don't capture meaningful additional patterns in English text. The 10KB
+improvement (-0.0042) was likely noise from the LSTM mixer's early
+adaptation phase.
+
+**Verdict**: On text data, 12 models is neutral (within noise). The real
+test for sparse/indirect models will be binary/structured data in the
+composite evaluation.
 
 ## Key Findings
 
