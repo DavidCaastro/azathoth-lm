@@ -4,16 +4,17 @@
 
 BPB is a vector, not a scalar. See R28 for justification.
 
-### Current Composite Baseline (Silesia T2: 12 files, 10KB, S3 BPTT=8 + surgery)
+### Current Composite Baseline (Silesia T2: 12 files, 10KB, post-Tier A + surgery)
 
 ```
-Composite BPB: mean=2.1907 | sigma=1.5795 | worst=6.0447 (sao)
-  Text-like mean:  1.1288 (6 files)
-  Binary mean:     3.2526 (6 files)
+Composite BPB: mean=2.2799 | sigma=1.6843 | worst=6.0483 (sao)
+  Text-like mean:  1.1321 (6 files)
+  Binary mean:     3.4278 (6 files)
 ```
 
-S1+S2+S3 improves all 12 files vs pre-S1 baseline. Largest gains on
-binary data: x-ray (-0.1798), mr (-0.1155), mozilla (-0.0930).
+Post-Tier A config: 14 CM models (incl. 2 word), BPTT=8 LSTM, APM disabled.
+WordModels add +12 MB but are neutral/slightly dilutive on most files.
+vs pre-S1: mean -0.0657, sigma -0.0426 (still improved overall).
 
 ### Acceptance Rule
 
@@ -110,15 +111,15 @@ Note: T1 not yet re-evaluated with S3. Values below are pre-S1 with surgery.
 | mozilla (10KB) | Binary | **1.7227** | 1.7673 | -0.0446 |
 | OEIS (10KB) | Numerical | **1.9045** | 1.9596 | -0.0551 |
 
-### Full Silesia Composite (Tier 2: 12 files, 10KB, S3 + surgery)
+### Full Silesia Composite (Tier 2: 12 files, 10KB, post-Tier A + surgery)
 
-| Metric | S3 + surgery | Pre-S1 surgery | Delta | Verdict |
+| Metric | Post-Tier A | Pre-S1 | Delta | Verdict |
 |---|---|---|---|---|
-| **mean** | **2.1907** | 2.3456 | **-0.1549** | DOWN |
-| **sigma** | **1.5795** | 1.6269 | **-0.0474** | DOWN |
-| **worst** | **6.0447** (sao) | 6.1083 | **-0.0636** | DOWN |
-| text-like mean | 1.1288 | 1.1725 | -0.0437 | DOWN |
-| binary mean | 3.2526 | 3.5186 | -0.2660 | DOWN |
+| **mean** | **2.2799** | 2.3456 | **-0.0657** | DOWN |
+| **sigma** | **1.6843** | 1.6269 | +0.0574 | UP (WordModel dilution) |
+| **worst** | **6.0483** (sao) | 6.1083 | **-0.0600** | DOWN |
+| text-like mean | 1.1321 | 1.1725 | -0.0404 | DOWN |
+| binary mean | 3.4278 | 3.5186 | -0.0908 | DOWN |
 
 ### Current Best — enwik8 (literature comparability only)
 
@@ -139,24 +140,24 @@ Note: T1 not yet re-evaluated with S3. Values below are pre-S1 with surgery.
 Full analysis in `docs/research/r25-silesia-evaluation.md` (pre-surgery)
 and `docs/research/r30-frontier-research-roadmap-reform.md` (with surgery).
 
-| File | Type | BPB (S3) | BPB (pre-S1) | Delta |
+| File | Type | BPB (post-A) | BPB (pre-S1) | Delta |
 |---|---|---|---|---|
-| xml | Structured markup | **0.5166** | 0.5689 | -0.0523 |
-| nci | Chemical data | **0.5303** | 0.5913 | -0.0610 |
-| samba | Source code (C) | **1.1432** | 1.1846 | -0.0414 |
-| reymont | Polish text | **1.4700** | 1.5172 | -0.0472 |
-| dickens | English text | **1.5424** | 1.5766 | -0.0342 |
-| webster | English dict | **1.5700** | 1.5967 | -0.0267 |
-| mozilla | Executable | **1.6297** | 1.7227 | -0.0930 |
-| mr | Medical image | **1.9311** | 2.0466 | -0.1155 |
-| ooffice | Office binary | **2.5624** | 2.6394 | -0.0770 |
-| osdb | MySQL database | **4.2632** | 4.3301 | -0.0669 |
-| x-ray | Medical X-ray | **4.0845** | 4.2643 | -0.1798 |
-| sao | Astronomy SAO | **6.0447** | 6.1083 | -0.0636 |
-| **Mean (all 12)** | | **2.1907** | 2.3456 | -0.1549 |
-| **σ (all 12)** | | **1.5795** | 1.6269 | -0.0474 |
-| **Text-like mean (6)** | | **1.1288** | 1.1725 | -0.0437 |
-| **Binary mean (6)** | | **3.2526** | 3.5186 | -0.2660 |
+| xml | Structured markup | **0.5212** | 0.5689 | -0.0477 |
+| nci | Chemical data | **0.5360** | 0.5913 | -0.0553 |
+| samba | Source code (C) | **1.1445** | 1.1846 | -0.0401 |
+| reymont | Polish text | **1.4778** | 1.5172 | -0.0394 |
+| dickens | English text | **1.5465** | 1.5766 | -0.0301 |
+| webster | English dict | **1.5664** | 1.5967 | -0.0303 |
+| mozilla | Executable | **1.6404** | 1.7227 | -0.0823 |
+| mr | Medical image | **1.9375** | 2.0466 | -0.1091 |
+| ooffice | Office binary | **2.5691** | 2.6394 | -0.0703 |
+| osdb | MySQL database | **4.2812** | 4.3301 | -0.0489 |
+| x-ray | Medical X-ray | **4.0903** | 4.2643 | -0.1740 |
+| sao | Astronomy SAO | **6.0483** | 6.1083 | -0.0600 |
+| **Mean (all 12)** | | **2.2799** | 2.3456 | -0.0657 |
+| **σ (all 12)** | | **1.6843** | 1.6269 | +0.0574 |
+| **Text-like mean (6)** | | **1.1321** | 1.1725 | -0.0404 |
+| **Binary mean (6)** | | **3.4278** | 3.5186 | -0.0908 |
 
 ### Cross-Domain (adversarial — 10KB)
 
