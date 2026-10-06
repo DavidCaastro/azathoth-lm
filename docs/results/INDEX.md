@@ -50,6 +50,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | R36 — S2 LayerNorm (100KB) | **1.1898** | -0.0057 vs S1, +768 params (+1.5%). Prerequisite for S3. |
 | R37 — S3 BPTT=8 (10KB) | **1.1669** | -0.0017 vs S2. First temporal learning. |
 | R37 — S3 BPTT=8 (100KB) | **1.1843** | -0.0055 vs S2. Adam(beta1=0.02). 148 B/s. New best. |
+| R38 — S4 WordModel (100KB) | 1.1852 | +0.0009 (neutral). Redundant with RWKV. +12 MB. Kept for diversity. |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).

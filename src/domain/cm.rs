@@ -356,12 +356,138 @@ impl IndirectModel {
     }
 }
 
+// --- Word model: case-folded word and word-pair contexts ---
+
+/// Determines if a byte is a word separator.
+#[inline]
+fn is_word_sep(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'.' | b',' | b';' | b':'
+             | b'!' | b'?' | b'(' | b')' | b'[' | b']' | b'{' | b'}'
+             | b'<' | b'>' | b'"' | b'\'' | b'/' | b'\\' | b'|' | b'='
+             | b'+' | b'-' | b'*' | b'&' | b'#' | b'@' | b'%' | b'^'
+             | b'~' | b'`' | 0 | 0xFF)
+}
+
+/// Case-fold ASCII: uppercase → lowercase, rest unchanged.
+#[inline]
+fn case_fold(b: u8) -> u8 {
+    if b >= b'A' && b <= b'Z' { b + 32 } else { b }
+}
+
+struct WordModel {
+    /// Hash table for word-based predictions
+    table: Vec<[Slot; 4]>,
+    mask: usize,
+    decay: f32,
+    /// Running hash of current word being built (case-folded)
+    current_word_hash: u64,
+    /// Hash of the most recently completed word
+    word0_hash: u64,
+    /// Hash of the second most recently completed word
+    word1_hash: u64,
+    /// Whether we're inside a word (non-separator seen since last sep)
+    in_word: bool,
+    /// Context type: 0 = word unigram (word[0]), 1 = word bigram (word[-1], word[-2])
+    ctx_type: u8,
+}
+
+impl WordModel {
+    fn new(ctx_type: u8, table_bits: usize, decay: f32) -> Self {
+        let size = 1usize << table_bits;
+        Self {
+            table: vec![[Slot::EMPTY; 4]; size],
+            mask: size - 1,
+            decay,
+            current_word_hash: FNV_OFFSET,
+            word0_hash: 0,
+            word1_hash: 0,
+            in_word: false,
+            ctx_type,
+        }
+    }
+
+    fn memory_bytes(&self) -> usize {
+        self.table.len() * std::mem::size_of::<[Slot; 4]>()
+    }
+
+    /// Compute context hash based on word state + bit context.
+    fn hash_context(&self, c: u16) -> (usize, u16) {
+        let mut hash = FNV_OFFSET;
+        hash = fnv_hash_byte(hash, 0x57); // 'W' tag for Word
+        hash = fnv_hash_byte(hash, self.ctx_type);
+        match self.ctx_type {
+            0 => {
+                // Word unigram: hash of last completed word
+                hash ^= self.word0_hash;
+                hash = hash.wrapping_mul(FNV_PRIME);
+            }
+            1 => {
+                // Word bigram: hash of last two completed words
+                hash ^= self.word0_hash;
+                hash = hash.wrapping_mul(FNV_PRIME);
+                hash ^= self.word1_hash;
+                hash = hash.wrapping_mul(FNV_PRIME);
+            }
+            _ => {}
+        }
+        // Also mix in the partial current word for extra context
+        hash ^= self.current_word_hash;
+        hash = hash.wrapping_mul(FNV_PRIME);
+        // Bit context
+        hash = fnv_hash_byte(hash, c as u8);
+        hash = fnv_hash_byte(hash, (c >> 8) as u8);
+        fnv_finish(hash, self.mask)
+    }
+
+    fn predict(&self, c: u16) -> f32 {
+        // Need at least one completed word for context
+        if self.word0_hash == 0 {
+            return 0.5;
+        }
+        if self.ctx_type == 1 && self.word1_hash == 0 {
+            return 0.5;
+        }
+        let (idx, cksum) = self.hash_context(c);
+        table_predict(&self.table, idx, cksum)
+    }
+
+    fn update(&mut self, c: u16, bit: u8) {
+        if self.word0_hash == 0 {
+            return;
+        }
+        if self.ctx_type == 1 && self.word1_hash == 0 {
+            return;
+        }
+        let (idx, cksum) = self.hash_context(c);
+        table_update(&mut self.table, idx, cksum, bit, self.decay);
+    }
+
+    /// Called after each complete byte to update word tracking state.
+    fn observe_byte(&mut self, byte: u8) {
+        if is_word_sep(byte) {
+            if self.in_word {
+                // Word boundary: finalize current word
+                self.word1_hash = self.word0_hash;
+                self.word0_hash = self.current_word_hash;
+                self.current_word_hash = FNV_OFFSET;
+                self.in_word = false;
+            }
+            // Multiple separators in a row: don't change word state
+        } else {
+            // Extend current word with case-folded byte
+            self.current_word_hash = fnv_hash_byte(self.current_word_hash, case_fold(byte));
+            self.in_word = true;
+        }
+    }
+}
+
 // --- Context model enum: zero-cost dispatch ---
 
 enum ContextModel {
     Order(OrderModel),
     Sparse(SparseModel),
     Indirect(IndirectModel),
+    Word(WordModel),
 }
 
 impl ContextModel {
@@ -371,6 +497,7 @@ impl ContextModel {
             ContextModel::Order(m) => m.predict(history, history_len, max_history, c),
             ContextModel::Sparse(m) => m.predict(history, history_len, max_history, c),
             ContextModel::Indirect(m) => m.predict(history, history_len, max_history, c),
+            ContextModel::Word(m) => m.predict(c),
         }
     }
 
@@ -380,6 +507,7 @@ impl ContextModel {
             ContextModel::Order(m) => m.update(history, history_len, max_history, c, bit),
             ContextModel::Sparse(m) => m.update(history, history_len, max_history, c, bit),
             ContextModel::Indirect(m) => m.update(history, history_len, max_history, c, bit),
+            ContextModel::Word(m) => m.update(c, bit),
         }
     }
 
@@ -388,13 +516,16 @@ impl ContextModel {
             ContextModel::Order(m) => m.memory_bytes(),
             ContextModel::Sparse(m) => m.memory_bytes(),
             ContextModel::Indirect(m) => m.memory_bytes(),
+            ContextModel::Word(m) => m.memory_bytes(),
         }
     }
 
-    /// Called after a full byte is processed. Only IndirectModel needs this.
+    /// Called after a full byte is processed. IndirectModel and WordModel need this.
     fn on_byte_done(&mut self, byte: u8) {
-        if let ContextModel::Indirect(m) = self {
-            m.observe_byte(byte);
+        match self {
+            ContextModel::Indirect(m) => m.observe_byte(byte),
+            ContextModel::Word(m) => m.observe_byte(byte),
+            _ => {}
         }
     }
 }
@@ -492,8 +623,10 @@ impl ContextMixer {
     const N_SPARSE: usize = 2;
     /// N_INDIRECT: number of indirect context models
     const N_INDIRECT: usize = 1;
+    /// N_WORD: number of word context models (unigram + bigram)
+    const N_WORD: usize = 2;
     /// Total CM models (before externals)
-    const N_MODELS: usize = Self::N_ORDER + Self::N_SPARSE + Self::N_INDIRECT;
+    const N_MODELS: usize = Self::N_ORDER + Self::N_SPARSE + Self::N_INDIRECT + Self::N_WORD;
 
     fn build_models() -> Vec<ContextModel> {
         let decay = 0.90;
@@ -518,6 +651,12 @@ impl ContextMixer {
 
         // Indirect context model (ICM order 1) — added to Group 1
         models.push(ContextModel::Indirect(IndirectModel::new(1, 16, 17, decay))); // 64KB hist + 3 MB table
+
+        // Word models (case-folded) — added to Group 1
+        // S4: word unigram (last completed word) + word bigram (last two words)
+        // Gleipnir: case-folds to "prevent halving evidence"
+        models.push(ContextModel::Word(WordModel::new(0, 18, decay))); // word unigram, 6 MB
+        models.push(ContextModel::Word(WordModel::new(1, 18, decay))); // word bigram,  6 MB
 
         models
     }
@@ -553,18 +692,18 @@ impl ContextMixer {
     }
 
     /// Create with hierarchical grouping + LSTM top mixer.
-    /// Groups: [orders 0-2] [orders 3-8] [sparse] [indirect] + auto-extended [externals].
+    /// Groups: [orders 0-2] [orders 3-8 + sparse + indirect + word] + auto-extended [externals].
     pub fn new_with_hierarchical(hidden_dim: usize, lr: f32) -> Self {
         let models = Self::build_models();
         let max_history = 32;
         // Group 0: CM orders 0-2 (short context patterns) — 3 models
-        // Group 1: CM orders 3-8 (long context exact matches) — 6 models
+        // Group 1: CM orders 3-8 + sparse + indirect + word (long context) — 11 models
         let n_cm = models.len();
         let group_starts = vec![0, 3, n_cm];
         let n_groups = 2;
         let sub_mixers = vec![
             BitMixer::new(3, 0.05),       // Group 0: orders 0-2
-            BitMixer::new(n_cm - 3, 0.05), // Group 1: orders 3-8 (+ sparse/indirect when enabled)
+            BitMixer::new(n_cm - 3, 0.05), // Group 1: orders 3-8 + sparse + indirect + word
         ];
         let top_lstm = LstmBitMixer::new(n_groups, hidden_dim, lr);
         Self {
@@ -811,6 +950,6 @@ mod tests {
     fn cm_model_count() {
         let cm = ContextMixer::new();
         assert_eq!(cm.n_models(), ContextMixer::N_MODELS);
-        assert_eq!(cm.n_models(), 12); // 9 order + 2 sparse + 1 indirect
+        assert_eq!(cm.n_models(), 14); // 9 order + 2 sparse + 1 indirect + 2 word
     }
 }

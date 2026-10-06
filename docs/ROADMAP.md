@@ -22,7 +22,7 @@ Principles:
 ## Current Position
 
 ```
-1.18  azathoth-lm   (0.1B RWKV + 12 CM + match + hier LSTM BPTT=8 + emb surgery)
+1.18  azathoth-lm   (0.1B RWKV + 14 CM + match + hier LSTM BPTT=8 + emb surgery)
 1.27  PAQ8px v217   (200+ byte-level CM, 3-layer mixer, universal)
 1.19  NNCP v3       (199M Transformer-XL)
 1.17  cmix v21      (2077 CM + 2x200 LSTM BPTT=100, universal)
@@ -75,7 +75,7 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | ~~S1~~ | ~~LSTM: coupled gates (i=1-f)~~ | **+0.0033 (neutral)** | ~~Low~~ | **DONE (R35).** -25% params (67K→50K), +15% speed (137→158 B/s). Prerequisite confirmed. |
 | ~~S2~~ | ~~LSTM: LayerNorm~~ | **-0.0057 (100KB)** | ~~Med~~ | **DONE (R36).** Per-gate LN, +768 params. -0.0510 on 10KB (early boost). Prerequisite confirmed. |
 | ~~S3~~ | ~~LSTM: BPTT=8 (1 full byte)~~ | **-0.0055 (100KB)** | ~~High~~ | **DONE (R37).** Adam(beta1=0.02, beta2=0.9999) + grad clip. -0.0017 on 10KB. 148 B/s (-4%). First temporal learning. |
-| S4 | WordModel (case-folded + word-pair) | -0.005 to -0.015 | Med | Only model type we're missing that every top compressor uses. Gleipnir case-folds to "prevent halving evidence." |
+| ~~S4~~ | ~~WordModel (case-folded + word-pair)~~ | **+0.0009 (neutral)** | ~~Med~~ | **DONE (R38).** Redundant with RWKV word-level understanding. +12 MB, -1% speed. Kept for diversity. |
 
 ### Tier A — High impact
 
@@ -142,6 +142,7 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | S1 | LSTM: coupled gates (i=1-f) | +0.0033 neutral, -25% params, +15% speed | **DONE** |
 | S2 | LSTM: LayerNorm per-gate | -0.0057 (100KB), -0.0510 (10KB early boost) | **DONE** |
 | S3 | LSTM: BPTT=8 + Adam(beta1≈0) | -0.0055 (100KB), -0.0017 (10KB). 148 B/s. | **DONE** |
+| S4 | WordModel (case-folded unigram + bigram) | +0.0009 (neutral). Redundant with RWKV. | **DONE** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
