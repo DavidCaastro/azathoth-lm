@@ -43,6 +43,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | Phase 2 — Hierarchical groups (100KB) | **1.2272** | -0.0277 vs flat LSTM, groups: [0-2][3-8][RWKV] |
 | Phase 3 — Match model (100KB) | **1.2177** | -0.0095 additional, hash-based longest match |
 | R27 — Embedding surgery center0.3 (100KB) | **1.1895** | -0.0282 additional, zero runtime cost |
+| R33 — CM scaling A1 Phase 1 (10KB) | **1.2138** | +3 models (sparse+indirect), -0.0042 vs baseline |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).

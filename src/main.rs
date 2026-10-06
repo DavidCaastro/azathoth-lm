@@ -349,7 +349,7 @@ fn cmd_cm_eval(args: &[String]) {
     let mut cm = ContextMixer::new();
     let mem_mb = cm.memory_bytes() as f64 / (1024.0 * 1024.0);
     eprintln!("[cm-eval] input: {} ({} bytes)", input_path, total_bytes);
-    eprintln!("[cm-eval] models: 9 (orders 0-8), hash tables: {:.1} MB", mem_mb);
+    eprintln!("[cm-eval] models: {} (9 order + 2 sparse + 1 indirect), hash tables: {:.1} MB", cm.n_models(), mem_mb);
     eprintln!("[cm-eval] evaluating ...");
     eprintln!();
 
@@ -467,7 +467,8 @@ fn cmd_hybrid_eval(args: &[String]) {
     };
     let mut match_model = if use_match { Some(MatchModel::new()) } else { None };
     let match_mem_mb = match_model.as_ref().map(|m| m.memory_bytes() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-    eprintln!("[hybrid] CM: 9 orders, {:.1} MB | mixer: {} | trie: {} nodes{}",
+    eprintln!("[hybrid] CM: {} models, {:.1} MB | mixer: {} | trie: {} nodes{}",
+              cm.n_models(),
               cm_mem_mb, mixer_str, bridge.node_count(),
               if use_match { format!(" | match: {:.1} MB", match_mem_mb) } else { String::new() });
 

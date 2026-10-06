@@ -7,9 +7,15 @@
 //! Architecture follows PAQ8px/cmix: bit-level context models with
 //! 4-way associative hash tables, recency decay.
 //!
+//! Model types:
+//!   - OrderModel: consecutive byte context (orders 0-8)
+//!   - SparseModel: non-consecutive byte offsets (skip-grams)
+//!   - IndirectModel: two-level ICM (context → byte history → prediction)
+//!
 //! Mixer options:
 //!   - Logistic: per-bit-context weights (256 independent vectors)
 //!   - LSTM: temporal state captures cross-model dependency patterns
+//!   - Hierarchical: groups of models → sub-mixers → top LSTM
 //!
 //! Heritage validated:
 //!   - Bit-level > byte-level (1.58 vs 1.645 BPB)
@@ -41,6 +47,9 @@ fn squash(x: f32) -> f32 {
 const SCALE: u16 = 16;
 const SMOOTH: f32 = 8.0;       // 0.5 * SCALE (Laplace smoothing)
 const SMOOTH_TOTAL: f32 = 16.0; // 1.0 * SCALE
+
+const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -77,6 +86,77 @@ impl Slot {
     }
 }
 
+// --- Shared hash table operations ---
+
+#[inline]
+fn fnv_hash_byte(hash: u64, byte: u8) -> u64 {
+    (hash ^ byte as u64).wrapping_mul(FNV_PRIME)
+}
+
+#[inline]
+fn fnv_finish(hash: u64, mask: usize) -> (usize, u16) {
+    let index = (hash as usize) & mask;
+    let cksum = ((hash >> 32) & 0xFFFF) as u16;
+    (index, if cksum == 0 { 1 } else { cksum })
+}
+
+/// Look up slot in 4-way bucket, return prediction or 0.5.
+#[inline]
+fn table_predict(table: &[[Slot; 4]], idx: usize, cksum: u16) -> f32 {
+    let bucket = &table[idx];
+    for slot in bucket {
+        if slot.checksum == cksum && !slot.is_empty() {
+            return slot.predict();
+        }
+    }
+    0.5
+}
+
+/// Update slot in 4-way bucket (find match, or empty, or evict LRU).
+#[inline]
+fn table_update(table: &mut [[Slot; 4]], idx: usize, cksum: u16, bit: u8, decay: f32) {
+    let bucket = &mut table[idx];
+    for slot in bucket.iter_mut() {
+        if slot.checksum == cksum {
+            slot.update(bit, decay);
+            return;
+        }
+    }
+    for slot in bucket.iter_mut() {
+        if slot.is_empty() {
+            slot.checksum = cksum;
+            slot.update(bit, 1.0);
+            return;
+        }
+    }
+    let mut min_i = 0;
+    let mut min_total = u32::MAX;
+    for (i, slot) in bucket.iter().enumerate() {
+        let total = slot.c0 as u32 + slot.c1 as u32;
+        if total < min_total {
+            min_total = total;
+            min_i = i;
+        }
+    }
+    bucket[min_i] = Slot { checksum: cksum, c0: 0, c1: 0 };
+    bucket[min_i].update(bit, 1.0);
+}
+
+/// Read byte from ring-buffer history at offset from current position.
+/// offset=1 is most recent byte, offset=2 is second most recent, etc.
+#[inline]
+fn history_byte(history: &[u8], history_len: usize, max_history: usize, offset: usize) -> Option<u8> {
+    if offset == 0 || offset > history_len {
+        return None;
+    }
+    let idx = if history_len <= max_history {
+        history_len - offset
+    } else {
+        (history_len - offset) % max_history
+    };
+    Some(history[idx])
+}
+
 // --- Order model: hash table for one context order ---
 
 struct OrderModel {
@@ -101,100 +181,221 @@ impl OrderModel {
         self.table.len() * std::mem::size_of::<[Slot; 4]>()
     }
 
-    /// Hash byte context + bit context into (bucket_index, checksum).
-    fn hash_context(
-        &self,
-        history: &[u8],
-        history_len: usize,
-        max_history: usize,
-        c: u16,
-    ) -> (usize, u16) {
-        let mut hash = 0xcbf29ce484222325u64; // FNV-1a
+    fn hash_context(&self, history: &[u8], history_len: usize, max_history: usize, c: u16) -> (usize, u16) {
+        let mut hash = FNV_OFFSET;
         for i in 0..self.order {
             let idx = if history_len <= max_history {
                 history_len - self.order + i
             } else {
                 (history_len - self.order + i) % max_history
             };
-            hash ^= history[idx] as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
+            hash = fnv_hash_byte(hash, history[idx]);
         }
-        // Include bit context (position + partial byte)
-        hash ^= c as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-
-        let index = (hash as usize) & self.mask;
-        // Avoid checksum 0 (reserved for empty slots)
-        let cksum = ((hash >> 32) & 0xFFFF) as u16;
-        let cksum = if cksum == 0 { 1 } else { cksum };
-        (index, cksum)
+        hash = fnv_hash_byte(hash, c as u8);
+        hash = fnv_hash_byte(hash, (c >> 8) as u8);
+        fnv_finish(hash, self.mask)
     }
 
-    /// Predict P(bit=1) for this context. Returns 0.5 if no match or insufficient context.
-    fn predict(
-        &self,
-        history: &[u8],
-        history_len: usize,
-        max_history: usize,
-        c: u16,
-    ) -> f32 {
+    fn predict(&self, history: &[u8], history_len: usize, max_history: usize, c: u16) -> f32 {
         if history_len < self.order {
             return 0.5;
         }
         let (idx, cksum) = self.hash_context(history, history_len, max_history, c);
-        let bucket = &self.table[idx];
-        for slot in bucket {
-            if slot.checksum == cksum && !slot.is_empty() {
-                return slot.predict();
-            }
-        }
-        0.5
+        table_predict(&self.table, idx, cksum)
     }
 
-    /// Update counts after observing bit.
-    fn update(
-        &mut self,
-        history: &[u8],
-        history_len: usize,
-        max_history: usize,
-        c: u16,
-        bit: u8,
-    ) {
+    fn update(&mut self, history: &[u8], history_len: usize, max_history: usize, c: u16, bit: u8) {
         if history_len < self.order {
             return;
         }
         let (idx, cksum) = self.hash_context(history, history_len, max_history, c);
-        let bucket = &mut self.table[idx];
+        table_update(&mut self.table, idx, cksum, bit, self.decay);
+    }
+}
 
-        // Find matching slot
-        for slot in bucket.iter_mut() {
-            if slot.checksum == cksum {
-                slot.update(bit, self.decay);
-                return;
+// --- Sparse model: hash table with non-consecutive byte offsets ---
+
+struct SparseModel {
+    offsets: &'static [usize], // byte offsets from current pos (1=most recent)
+    table: Vec<[Slot; 4]>,
+    mask: usize,
+    decay: f32,
+}
+
+impl SparseModel {
+    fn new(offsets: &'static [usize], table_bits: usize, decay: f32) -> Self {
+        let size = 1usize << table_bits;
+        Self {
+            offsets,
+            table: vec![[Slot::EMPTY; 4]; size],
+            mask: size - 1,
+            decay,
+        }
+    }
+
+    fn memory_bytes(&self) -> usize {
+        self.table.len() * std::mem::size_of::<[Slot; 4]>()
+    }
+
+    fn min_history(&self) -> usize {
+        self.offsets.iter().copied().max().unwrap_or(0)
+    }
+
+    fn hash_context(&self, history: &[u8], history_len: usize, max_history: usize, c: u16) -> (usize, u16) {
+        let mut hash = FNV_OFFSET;
+        // Mix in a tag to differentiate from OrderModel with same bytes
+        hash = fnv_hash_byte(hash, 0x53); // 'S' tag for Sparse
+        for &off in self.offsets {
+            if let Some(b) = history_byte(history, history_len, max_history, off) {
+                hash = fnv_hash_byte(hash, b);
             }
         }
+        hash = fnv_hash_byte(hash, c as u8);
+        hash = fnv_hash_byte(hash, (c >> 8) as u8);
+        fnv_finish(hash, self.mask)
+    }
 
-        // Find empty slot
-        for slot in bucket.iter_mut() {
-            if slot.is_empty() {
-                slot.checksum = cksum;
-                slot.update(bit, 1.0); // no decay on first observation
-                return;
-            }
+    fn predict(&self, history: &[u8], history_len: usize, max_history: usize, c: u16) -> f32 {
+        if history_len < self.min_history() {
+            return 0.5;
         }
+        let (idx, cksum) = self.hash_context(history, history_len, max_history, c);
+        table_predict(&self.table, idx, cksum)
+    }
 
-        // Evict slot with lowest total count
-        let mut min_i = 0;
-        let mut min_total = u32::MAX;
-        for (i, slot) in bucket.iter().enumerate() {
-            let total = slot.c0 as u32 + slot.c1 as u32;
-            if total < min_total {
-                min_total = total;
-                min_i = i;
-            }
+    fn update(&mut self, history: &[u8], history_len: usize, max_history: usize, c: u16, bit: u8) {
+        if history_len < self.min_history() {
+            return;
         }
-        bucket[min_i] = Slot { checksum: cksum, c0: 0, c1: 0 };
-        bucket[min_i].update(bit, 1.0);
+        let (idx, cksum) = self.hash_context(history, history_len, max_history, c);
+        table_update(&mut self.table, idx, cksum, bit, self.decay);
+    }
+}
+
+// --- Indirect context model (ICM): two-level byte-history lookup ---
+
+struct IndirectModel {
+    order: usize,
+    // Level 1: context hash → last byte seen after this context
+    byte_history: Vec<u8>,
+    byte_hist_mask: usize,
+    // Level 2: (predicted_byte, c) → bit prediction
+    table: Vec<[Slot; 4]>,
+    mask: usize,
+    decay: f32,
+    // Cached context hash for byte_history update after full byte
+    cached_ctx_hash: usize,
+}
+
+impl IndirectModel {
+    fn new(order: usize, hist_bits: usize, table_bits: usize, decay: f32) -> Self {
+        let hist_size = 1usize << hist_bits;
+        let table_size = 1usize << table_bits;
+        Self {
+            order,
+            byte_history: vec![0u8; hist_size],
+            byte_hist_mask: hist_size - 1,
+            table: vec![[Slot::EMPTY; 4]; table_size],
+            mask: table_size - 1,
+            decay,
+            cached_ctx_hash: 0,
+        }
+    }
+
+    fn memory_bytes(&self) -> usize {
+        self.byte_history.len() + self.table.len() * std::mem::size_of::<[Slot; 4]>()
+    }
+
+    fn context_hash(&self, history: &[u8], history_len: usize, max_history: usize) -> usize {
+        let mut hash = FNV_OFFSET;
+        hash = fnv_hash_byte(hash, 0x49); // 'I' tag for Indirect
+        let start = if history_len >= self.order { history_len - self.order } else { 0 };
+        let end = history_len;
+        for i in start..end {
+            let idx = if history_len <= max_history { i } else { i % max_history };
+            hash = fnv_hash_byte(hash, history[idx]);
+        }
+        (hash as usize) & self.byte_hist_mask
+    }
+
+    fn predict(&self, history: &[u8], history_len: usize, max_history: usize, c: u16) -> f32 {
+        if history_len < self.order {
+            return 0.5;
+        }
+        let ctx_h = self.context_hash(history, history_len, max_history);
+        let predicted_byte = self.byte_history[ctx_h];
+        // Secondary context: (predicted_byte, bit_context)
+        let mut hash = FNV_OFFSET;
+        hash = fnv_hash_byte(hash, predicted_byte);
+        hash = fnv_hash_byte(hash, c as u8);
+        hash = fnv_hash_byte(hash, (c >> 8) as u8);
+        let (idx, cksum) = fnv_finish(hash, self.mask);
+        table_predict(&self.table, idx, cksum)
+    }
+
+    fn update(&mut self, history: &[u8], history_len: usize, max_history: usize, c: u16, bit: u8) {
+        if history_len < self.order {
+            return;
+        }
+        // Cache context hash on first bit (c=1) for byte_history update later
+        if c == 1 {
+            self.cached_ctx_hash = self.context_hash(history, history_len, max_history);
+        }
+        let predicted_byte = self.byte_history[self.cached_ctx_hash];
+        let mut hash = FNV_OFFSET;
+        hash = fnv_hash_byte(hash, predicted_byte);
+        hash = fnv_hash_byte(hash, c as u8);
+        hash = fnv_hash_byte(hash, (c >> 8) as u8);
+        let (idx, cksum) = fnv_finish(hash, self.mask);
+        table_update(&mut self.table, idx, cksum, bit, self.decay);
+    }
+
+    /// Update byte_history after a full byte is observed.
+    fn observe_byte(&mut self, byte: u8) {
+        self.byte_history[self.cached_ctx_hash] = byte;
+    }
+}
+
+// --- Context model enum: zero-cost dispatch ---
+
+enum ContextModel {
+    Order(OrderModel),
+    Sparse(SparseModel),
+    Indirect(IndirectModel),
+}
+
+impl ContextModel {
+    #[inline]
+    fn predict(&self, history: &[u8], history_len: usize, max_history: usize, c: u16) -> f32 {
+        match self {
+            ContextModel::Order(m) => m.predict(history, history_len, max_history, c),
+            ContextModel::Sparse(m) => m.predict(history, history_len, max_history, c),
+            ContextModel::Indirect(m) => m.predict(history, history_len, max_history, c),
+        }
+    }
+
+    #[inline]
+    fn update(&mut self, history: &[u8], history_len: usize, max_history: usize, c: u16, bit: u8) {
+        match self {
+            ContextModel::Order(m) => m.update(history, history_len, max_history, c, bit),
+            ContextModel::Sparse(m) => m.update(history, history_len, max_history, c, bit),
+            ContextModel::Indirect(m) => m.update(history, history_len, max_history, c, bit),
+        }
+    }
+
+    fn memory_bytes(&self) -> usize {
+        match self {
+            ContextModel::Order(m) => m.memory_bytes(),
+            ContextModel::Sparse(m) => m.memory_bytes(),
+            ContextModel::Indirect(m) => m.memory_bytes(),
+        }
+    }
+
+    /// Called after a full byte is processed. Only IndirectModel needs this.
+    fn on_byte_done(&mut self, byte: u8) {
+        if let ContextModel::Indirect(m) = self {
+            m.observe_byte(byte);
+        }
     }
 }
 
@@ -267,10 +468,10 @@ enum MixerKind {
 /// Byte-level context mixing predictor.
 ///
 /// Processes raw bytes, predicting each as 8 bits (MSB first).
-/// Combines predictions from 9 hash-table models (orders 0-8)
-/// via logistic or LSTM mixing.
+/// Combines predictions from multiple hash-table models
+/// (order, sparse, indirect) via logistic or LSTM mixing.
 pub struct ContextMixer {
-    models: Vec<OrderModel>,
+    models: Vec<ContextModel>,
     mixer: MixerKind,
     history: Vec<u8>,
     max_history: usize,
@@ -278,27 +479,54 @@ pub struct ContextMixer {
     pred_buf: Vec<f32>,
 }
 
+// Sparse model offset tables (static lifetime).
+static SPARSE_SKIP1: &[usize] = &[1, 3];       // byte[-1], byte[-3]: skip-1 bigram
+static SPARSE_SKIP2: &[usize] = &[1, 4];       // byte[-1], byte[-4]: skip-2 bigram
+static SPARSE_SKIP3: &[usize] = &[2, 4];       // byte[-2], byte[-4]: even positions
+static SPARSE_WIDE: &[usize] = &[1, 2, 4, 8];  // multi-scale sparse context
+
 impl ContextMixer {
-    fn build_models() -> Vec<OrderModel> {
+    /// N_ORDER: number of consecutive-context order models (0-8)
+    const N_ORDER: usize = 9;
+    /// N_SPARSE: number of sparse skip-gram models
+    const N_SPARSE: usize = 2;
+    /// N_INDIRECT: number of indirect context models
+    const N_INDIRECT: usize = 1;
+    /// Total CM models (before externals)
+    const N_MODELS: usize = Self::N_ORDER + Self::N_SPARSE + Self::N_INDIRECT;
+
+    fn build_models() -> Vec<ContextModel> {
         let decay = 0.90;
-        vec![
-            OrderModel::new(0,  8, decay), //    256 buckets —   6 KB
-            OrderModel::new(1, 16, decay), //  64 Ki buckets — 1.5 MB
-            OrderModel::new(2, 18, decay), // 256 Ki buckets —   6 MB
-            OrderModel::new(3, 20, decay), //   1 Mi buckets —  24 MB
-            OrderModel::new(4, 20, decay), //   1 Mi buckets —  24 MB
-            OrderModel::new(5, 19, decay), // 512 Ki buckets —  12 MB
-            OrderModel::new(6, 18, decay), // 256 Ki buckets —   6 MB
-            OrderModel::new(7, 17, decay), // 128 Ki buckets —   3 MB
-            OrderModel::new(8, 16, decay), //  64 Ki buckets — 1.5 MB
-        ]
+        let mut models: Vec<ContextModel> = Vec::with_capacity(Self::N_MODELS);
+
+        // Group 0: Order models 0-2 (short context)
+        models.push(ContextModel::Order(OrderModel::new(0,  8, decay)));  //   6 KB
+        models.push(ContextModel::Order(OrderModel::new(1, 16, decay)));  // 1.5 MB
+        models.push(ContextModel::Order(OrderModel::new(2, 18, decay)));  //   6 MB
+
+        // Group 1: Order models 3-8 (long context)
+        models.push(ContextModel::Order(OrderModel::new(3, 20, decay)));  //  24 MB
+        models.push(ContextModel::Order(OrderModel::new(4, 20, decay)));  //  24 MB
+        models.push(ContextModel::Order(OrderModel::new(5, 19, decay)));  //  12 MB
+        models.push(ContextModel::Order(OrderModel::new(6, 18, decay)));  //   6 MB
+        models.push(ContextModel::Order(OrderModel::new(7, 17, decay)));  //   3 MB
+        models.push(ContextModel::Order(OrderModel::new(8, 16, decay)));  // 1.5 MB
+
+        // Sparse models (skip-gram patterns) — added to Group 1
+        models.push(ContextModel::Sparse(SparseModel::new(SPARSE_SKIP1, 17, decay))); // 3 MB
+        models.push(ContextModel::Sparse(SparseModel::new(SPARSE_WIDE,  16, decay))); // 1.5 MB
+
+        // Indirect context model (ICM order 1) — added to Group 1
+        models.push(ContextModel::Indirect(IndirectModel::new(1, 16, 17, decay))); // 64KB hist + 3 MB table
+
+        models
     }
 
     /// Create with logistic mixer (per-bit-context weights).
     pub fn new() -> Self {
         let models = Self::build_models();
         let n_models = models.len();
-        let max_history = 8;
+        let max_history = 32;
         Self {
             models,
             mixer: MixerKind::Logistic(BitMixer::new(n_models, 0.05)),
@@ -313,7 +541,7 @@ impl ContextMixer {
     pub fn new_with_lstm(hidden_dim: usize, lr: f32) -> Self {
         let models = Self::build_models();
         let n_models = models.len();
-        let max_history = 8;
+        let max_history = 32;
         Self {
             models,
             mixer: MixerKind::Lstm(LstmBitMixer::new(n_models, hidden_dim, lr)),
@@ -325,18 +553,18 @@ impl ContextMixer {
     }
 
     /// Create with hierarchical grouping + LSTM top mixer.
-    /// Groups: [CM orders 0-2] [CM orders 3-8] + optional [RWKV bridge].
-    /// Each group has a logistic sub-mixer. Top LSTM mixes group outputs.
+    /// Groups: [orders 0-2] [orders 3-8] [sparse] [indirect] + auto-extended [externals].
     pub fn new_with_hierarchical(hidden_dim: usize, lr: f32) -> Self {
         let models = Self::build_models();
-        let max_history = 8;
-        // Group 0: CM orders 0-2 (short context patterns)
-        // Group 1: CM orders 3-8 (long context exact matches)
-        let group_starts = vec![0, 3, 9];
+        let max_history = 32;
+        // Group 0: CM orders 0-2 (short context patterns) — 3 models
+        // Group 1: CM orders 3-8 (long context exact matches) — 6 models
+        let n_cm = models.len();
+        let group_starts = vec![0, 3, n_cm];
         let n_groups = 2;
         let sub_mixers = vec![
-            BitMixer::new(3, 0.05),
-            BitMixer::new(6, 0.05),
+            BitMixer::new(3, 0.05),       // Group 0: orders 0-2
+            BitMixer::new(n_cm - 3, 0.05), // Group 1: orders 3-8 (+ sparse/indirect when enabled)
         ];
         let top_lstm = LstmBitMixer::new(n_groups, hidden_dim, lr);
         Self {
@@ -350,13 +578,18 @@ impl ContextMixer {
             history: Vec::with_capacity(max_history),
             max_history,
             history_len: 0,
-            pred_buf: vec![0.0f32; 9],
+            pred_buf: vec![0.0f32; Self::N_MODELS],
         }
     }
 
     /// Total memory used by hash tables (bytes).
     pub fn memory_bytes(&self) -> usize {
         self.models.iter().map(|m| m.memory_bytes()).sum()
+    }
+
+    /// Number of CM models (before externals).
+    pub fn n_models(&self) -> usize {
+        self.models.len()
     }
 
     /// Number of mixer parameters (0 for logistic, >0 for LSTM).
@@ -374,14 +607,11 @@ impl ContextMixer {
     }
 
     /// Process one byte with external bit predictions (e.g. from RWKV bridge).
-    /// `external_bit_preds[j]` = P(bit_j=1) from the external model, for j=0..7 (MSB first).
-    /// These are added as an extra input to the mixer alongside the CM order models.
     pub fn process_byte_with_external(&mut self, byte: u8, external_bit_preds: &[f32; 8]) -> f64 {
         self.process_byte_inner(byte, &[external_bit_preds], None)
     }
 
     /// Process one byte with multiple external bit prediction sources.
-    /// Each entry in `externals` is a [f32; 8] of bit predictions from a different model.
     pub fn process_byte_with_externals(&mut self, byte: u8, externals: &[&[f32; 8]]) -> f64 {
         self.process_byte_inner(byte, externals, None)
     }
@@ -392,7 +622,6 @@ impl ContextMixer {
     }
 
     /// Update CM state (history + hash tables) without measuring cost.
-    /// Used for confidence-skip: keeps CM context current for non-skipped bytes.
     pub fn observe_byte(&mut self, byte: u8) {
         let mut c: u16 = 1;
         for j in 0..8u8 {
@@ -401,6 +630,10 @@ impl ContextMixer {
                 model.update(&self.history, self.history_len, self.max_history, c, bit);
             }
             c = (c << 1) | bit as u16;
+        }
+        // Notify indirect models of completed byte
+        for model in &mut self.models {
+            model.on_byte_done(byte);
         }
         if self.history.len() < self.max_history {
             self.history.push(byte);
@@ -442,7 +675,7 @@ impl ContextMixer {
         for j in 0..8u8 {
             let bit = (byte >> (7 - j)) & 1;
 
-            // Collect predictions from CM order models
+            // Collect predictions from all CM models
             for (i, model) in self.models.iter().enumerate() {
                 self.pred_buf[i] =
                     model.predict(&self.history, self.history_len, self.max_history, c);
@@ -454,7 +687,6 @@ impl ContextMixer {
             }
 
             // Mix and update (dispatch by mixer type)
-            // Borrow split: mixer borrows separately from pred_buf
             let prediction = match &mut self.mixer {
                 MixerKind::Logistic(m) => m.predict(c, &self.pred_buf[..total_inputs]),
                 MixerKind::Lstm(m) => m.predict(&self.pred_buf[..total_inputs]),
@@ -504,6 +736,11 @@ impl ContextMixer {
             c = (c << 1) | bit as u16;
         }
 
+        // Notify indirect models of completed byte
+        for model in &mut self.models {
+            model.on_byte_done(byte);
+        }
+
         if self.history.len() < self.max_history {
             self.history.push(byte);
         } else {
@@ -532,7 +769,6 @@ mod tests {
     #[test]
     fn cm_learns_repeated_byte() {
         let mut cm = ContextMixer::new();
-        // Feed repeated 'A' (0x41). After enough repetitions, CM should predict well.
         let byte = 0x41u8;
         let mut cost_first = 0.0f64;
         let mut cost_last = 0.0f64;
@@ -541,9 +777,7 @@ mod tests {
             if i == 0 { cost_first = bits; }
             if i == 199 { cost_last = bits; }
         }
-        // First byte: ~8 bits (no context, uniform prediction)
         assert!(cost_first > 6.0, "first byte should be expensive: {}", cost_first);
-        // After 200 repetitions: should predict much better
         assert!(cost_last < 2.0, "200th byte should be cheap: {}", cost_last);
     }
 
@@ -551,13 +785,11 @@ mod tests {
     fn cm_learns_pattern() {
         let mut cm = ContextMixer::new();
         let pattern = b"ABCABC";
-        // Feed the pattern 50 times
         for _ in 0..50 {
             for &byte in pattern {
                 cm.process_byte(byte);
             }
         }
-        // Average BPB over last iteration should be lower than first
         let mut last_iter_bits = 0.0f64;
         for &byte in pattern {
             last_iter_bits += cm.process_byte(byte);
@@ -570,8 +802,15 @@ mod tests {
     fn cm_memory_reasonable() {
         let cm = ContextMixer::new();
         let mem_mb = cm.memory_bytes() as f64 / (1024.0 * 1024.0);
-        // Expected ~78 MB
-        assert!(mem_mb > 50.0 && mem_mb < 120.0,
+        // Expected ~110 MB (78 MB order + 18 MB sparse + 12.3 MB indirect)
+        assert!(mem_mb > 80.0 && mem_mb < 150.0,
                 "memory usage {:.1} MB outside expected range", mem_mb);
+    }
+
+    #[test]
+    fn cm_model_count() {
+        let cm = ContextMixer::new();
+        assert_eq!(cm.n_models(), ContextMixer::N_MODELS);
+        assert_eq!(cm.n_models(), 12); // 9 order + 2 sparse + 1 indirect
     }
 }

@@ -22,7 +22,7 @@ Principles:
 ## Current Position
 
 ```
-1.19  azathoth-lm   (0.1B RWKV + 9 CM + match + hier LSTM + emb surgery)
+1.19  azathoth-lm   (0.1B RWKV + 12 CM + match + hier LSTM + emb surgery)
 1.27  PAQ8px        (200+ byte-level CM, universal)
 1.19  NNCP v3       (199M Transformer-XL)
 1.17  cmix          (2077 byte-level models + LSTM mixer, universal)
@@ -39,12 +39,12 @@ Gap to target: ~0.19 BPB. Tied with NNCP, below PAQ8px.
 Input bytes
     ├─→ Tokenizer → RWKV-7 0.1B Q8 → TokenByteTrie → bit preds (Group 2)
     ├─→ CM orders 0-2 → logistic sub-mixer → Group 0 (short ctx)
-    ├─→ CM orders 3-8 → logistic sub-mixer → Group 1 (long ctx)
+    ├─→ CM orders 3-8 + sparse + ICM → logistic sub-mixer → Group 1 (long ctx)
     ├─→ MatchModel (ctx 4-128) → bit preds (Group 3: match)
     └──────────── Top LSTM (H=128, 67K params) → final P(bit=1)
 ```
 
-Feature-complete. Remaining gap: **scale** (9+match vs 200+ models)
+Feature-complete. Remaining gap: **scale** (12+match vs 200+ models)
 and **full SA-PPM** (suffix array for optimal matching).
 
 ### Composite Baseline (Tier 1, 10KB each, with emb surgery center0.3)
@@ -114,6 +114,7 @@ and **full SA-PPM** (suffix array for optimal matching).
 | R30 | Frontier research + roadmap reform | T2 surgery + data-driven priorities | **DONE** |
 | R31 | Pretrained symbiosis research | No 2nd neural; CM scaling is the path | **DONE** |
 | R32 | G1d 0.1B checkpoint eval | +0.0693 enwik8, +0.3324 samba | **KILLED** |
+| R33 | CM scaling A1 Phase 1 | -0.0042 BPB (12 models, sparse+ICM) | **DONE** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
