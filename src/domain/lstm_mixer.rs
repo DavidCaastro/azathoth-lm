@@ -13,6 +13,10 @@
 //! "LSTM: A Search Space Odyssey" (Greff et al., 5400 experiments)
 //! and used in cmix production. Prevents cell state from growing
 //! unboundedly. -25% effective gate params.
+//!
+//! LayerNorm (S2, R34): per-gate normalization with learnable
+//! gamma/beta. No temporal dependency → streaming-compatible.
+//! Prerequisite for BPTT>1 (S3). cmix uses per-gate LN.
 
 #[inline]
 fn stretch(p: f32) -> f32 {
@@ -38,6 +42,7 @@ fn det_rand(seed: u64) -> f32 {
 }
 
 const GRAD_CLIP: f32 = 5.0;
+const LN_EPS: f32 = 1e-5;
 
 /// LSTM-based bit mixer that outputs dynamic mixing weights.
 ///
@@ -64,6 +69,10 @@ pub struct LstmBitMixer {
     // bias[gate*H + h]
     bias: Vec<f32>,
 
+    // LayerNorm per gate (S2): gamma * x_hat + beta
+    ln_gamma: Vec<f32>, // (3 * H), init 1.0
+    ln_beta: Vec<f32>,  // (3 * H), init 0.0
+
     // Output layer: hidden → model weights
     w_out: Vec<f32>, // (n_models * H)
     b_out: Vec<f32>, // (n_models)
@@ -81,6 +90,7 @@ pub struct LstmBitMixer {
     o_gate: Vec<f32>,
     tanh_c: Vec<f32>,
     cached_input: Vec<f32>,
+    cached_pre_act: Vec<f32>, // (3 * H), raw pre-activations before LN
 
     lr: f32,
 }
@@ -128,6 +138,8 @@ impl LstmBitMixer {
             w_ih,
             w_hh,
             bias,
+            ln_gamma: vec![1.0; h3],
+            ln_beta: vec![0.0; h3],
             w_out,
             b_out,
             h: vec![0.0; hidden_dim],
@@ -140,6 +152,7 @@ impl LstmBitMixer {
             o_gate: vec![0.0; hidden_dim],
             tanh_c: vec![0.0; hidden_dim],
             cached_input: vec![0.0; n_models],
+            cached_pre_act: vec![0.0; h3],
             lr,
         }
     }
@@ -194,8 +207,7 @@ impl LstmBitMixer {
         self.h_prev.copy_from_slice(&self.h);
         self.c_prev.copy_from_slice(&self.c);
 
-        // Compute 3 gates: forget, candidate, output
-        // Input gate is coupled: i = 1 - f (S1)
+        // Step 1: Compute raw pre-activations for all 3 gates
         for gh in 0..(3 * hd) {
             let mut val = self.bias[gh];
             let ih_base = gh * self.input_dim;
@@ -206,17 +218,45 @@ impl LstmBitMixer {
             for j in 0..hd {
                 val += self.w_hh[hh_base + j] * self.h_prev[j];
             }
+            self.cached_pre_act[gh] = val;
+        }
 
-            let gate = gh / hd;
-            let idx = gh % hd;
-            match gate {
-                0 => {
-                    self.f_gate[idx] = sigmoid(val);
-                    self.i_gate[idx] = 1.0 - self.f_gate[idx]; // coupled
+        // Step 2: LayerNorm per gate → nonlinearity
+        // Input gate is coupled: i = 1 - f (S1)
+        for gate in 0..3usize {
+            let base = gate * hd;
+
+            // Mean
+            let mut mean = 0.0f32;
+            for i in 0..hd {
+                mean += self.cached_pre_act[base + i];
+            }
+            mean /= hd as f32;
+
+            // Variance
+            let mut var = 0.0f32;
+            for i in 0..hd {
+                let d = self.cached_pre_act[base + i] - mean;
+                var += d * d;
+            }
+            var /= hd as f32;
+
+            let inv_std = 1.0 / (var + LN_EPS).sqrt();
+
+            // Normalize, scale, shift, then nonlinearity
+            for i in 0..hd {
+                let x_hat = (self.cached_pre_act[base + i] - mean) * inv_std;
+                let ln_out = self.ln_gamma[base + i] * x_hat + self.ln_beta[base + i];
+
+                match gate {
+                    0 => {
+                        self.f_gate[i] = sigmoid(ln_out);
+                        self.i_gate[i] = 1.0 - self.f_gate[i]; // coupled
+                    }
+                    1 => self.g_gate[i] = ln_out.tanh(),
+                    2 => self.o_gate[i] = sigmoid(ln_out),
+                    _ => unreachable!(),
                 }
-                1 => self.g_gate[idx] = val.tanh(),
-                2 => self.o_gate[idx] = sigmoid(val),
-                _ => unreachable!(),
             }
         }
 
@@ -279,6 +319,8 @@ impl LstmBitMixer {
 
         // LSTM backward through current step only (BPTT=1)
         // 3 gates: forget, candidate, output. Input gate coupled: i = 1 - f.
+        // Step 1: Compute d_ln_out (gradient of LN output, before LN backward)
+        let mut d_ln_out = vec![0.0f32; 3 * hd];
         for i in 0..hd {
             let d_o = d_h[i] * self.tanh_c[i];
             let d_tanh_c = d_h[i] * self.o_gate[i];
@@ -288,30 +330,68 @@ impl LstmBitMixer {
             let d_i = d_c * self.g_gate[i];
             let d_g = d_c * self.i_gate[i];
 
-            // Coupled gate: i = 1 - f, so di/d(pre_f) = -sigmoid'(pre_f)
-            // Combined: d_pre_f = (d_f - d_i) * f * (1 - f)
-            let d_pre_f = (d_f - d_i) * self.f_gate[i] * (1.0 - self.f_gate[i]);
-            let d_pre_g = d_g * (1.0 - self.g_gate[i] * self.g_gate[i]);
-            let d_pre_o = d_o * self.o_gate[i] * (1.0 - self.o_gate[i]);
+            // Coupled: d_ln_f = (d_f - d_i) * sigmoid'(ln_out_f)
+            d_ln_out[0 * hd + i] = (d_f - d_i) * self.f_gate[i] * (1.0 - self.f_gate[i]);
+            d_ln_out[1 * hd + i] = d_g * (1.0 - self.g_gate[i] * self.g_gate[i]);
+            d_ln_out[2 * hd + i] = d_o * self.o_gate[i] * (1.0 - self.o_gate[i]);
+        }
 
-            // 3 gates: forget(0), candidate(1), output(2)
-            let d_pres = [d_pre_f, d_pre_g, d_pre_o];
+        // Step 2: Backprop through LayerNorm per gate → update gamma, beta, weights
+        let inv_h = 1.0 / hd as f32;
+        for gate in 0..3usize {
+            let base = gate * hd;
 
-            for (gate, &dp) in d_pres.iter().enumerate() {
-                let gh = gate * hd + i;
+            // Recompute mean/var from cached_pre_act
+            let mut mean = 0.0f32;
+            for i in 0..hd {
+                mean += self.cached_pre_act[base + i];
+            }
+            mean *= inv_h;
+
+            let mut var = 0.0f32;
+            for i in 0..hd {
+                let d = self.cached_pre_act[base + i] - mean;
+                var += d * d;
+            }
+            var *= inv_h;
+
+            let inv_std = 1.0 / (var + LN_EPS).sqrt();
+
+            // Pass 1: compute d_x_hat and accumulate sums (using current gamma)
+            let mut sum_d_x_hat = 0.0f32;
+            let mut sum_d_x_hat_x_hat = 0.0f32;
+            let mut d_x_hat = vec![0.0f32; hd];
+            for i in 0..hd {
+                let x_hat = (self.cached_pre_act[base + i] - mean) * inv_std;
+                d_x_hat[i] = d_ln_out[base + i] * self.ln_gamma[base + i];
+                sum_d_x_hat += d_x_hat[i];
+                sum_d_x_hat_x_hat += d_x_hat[i] * x_hat;
+            }
+
+            // Pass 2: update gamma/beta, compute d_pre_act, update weights
+            for i in 0..hd {
+                let x_hat = (self.cached_pre_act[base + i] - mean) * inv_std;
+
+                // Update gamma and beta
+                let dg = (d_ln_out[base + i] * x_hat).clamp(-GRAD_CLIP, GRAD_CLIP);
+                let db = d_ln_out[base + i].clamp(-GRAD_CLIP, GRAD_CLIP);
+                self.ln_gamma[base + i] -= self.lr * dg;
+                self.ln_beta[base + i] -= self.lr * db;
+
+                // LN backward: d_pre_act
+                let dp = inv_std * (d_x_hat[i] - inv_h * (sum_d_x_hat + x_hat * sum_d_x_hat_x_hat));
                 let dp_clipped = dp.clamp(-GRAD_CLIP, GRAD_CLIP);
 
-                // Update w_ih
+                // Update w_ih, w_hh, bias
+                let gh = gate * hd + i;
                 let ih_base = gh * self.input_dim;
                 for j in 0..n {
                     self.w_ih[ih_base + j] -= self.lr * dp_clipped * self.cached_input[j];
                 }
-                // Update w_hh
                 let hh_base = gh * hd;
                 for j in 0..hd {
                     self.w_hh[hh_base + j] -= self.lr * dp_clipped * self.h_prev[j];
                 }
-                // Update bias
                 self.bias[gh] -= self.lr * dp_clipped;
             }
         }
@@ -319,6 +399,7 @@ impl LstmBitMixer {
 
     pub fn param_count(&self) -> usize {
         self.w_ih.len() + self.w_hh.len() + self.bias.len()
+            + self.ln_gamma.len() + self.ln_beta.len()
             + self.w_out.len() + self.b_out.len()
     }
 }
@@ -358,8 +439,8 @@ mod tests {
     fn lstm_mixer_param_count() {
         let mixer = LstmBitMixer::new(10, 128, 0.001);
         let params = mixer.param_count();
-        // 3 gates (coupled: i=1-f): 3*(128*10 + 128*128 + 128) + 10*128 + 10
-        let expected = 3 * (128 * 10 + 128 * 128 + 128) + 10 * 128 + 10;
+        // 3 gates: 3*(128*10 + 128*128 + 128) + LN: 2*3*128 + out: 10*128 + 10
+        let expected = 3 * (128 * 10 + 128 * 128 + 128) + 2 * 3 * 128 + 10 * 128 + 10;
         assert_eq!(params, expected, "param count mismatch");
     }
 
