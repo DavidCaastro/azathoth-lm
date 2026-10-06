@@ -42,7 +42,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--match] [--log FILE.jsonl]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--match] [--log FILE.jsonl] [--emb-surgery METHOD]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -393,6 +393,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut lstm_hidden: usize = 128;
     let mut lstm_lr: f32 = 0.002;
     let mut log_path: Option<String> = None;
+    let mut emb_surgery: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -407,6 +408,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--lstm-hidden" => { i += 1; lstm_hidden = args[i].parse().unwrap(); use_lstm = true; }
             "--lstm-lr" => { i += 1; lstm_lr = args[i].parse().unwrap(); use_lstm = true; }
             "--log" => { i += 1; log_path = Some(args[i].clone()); }
+            "--emb-surgery" => { i += 1; emb_surgery = Some(args[i].clone()); }
             _ => {}
         }
         i += 1;
@@ -424,8 +426,13 @@ fn cmd_hybrid_eval(args: &[String]) {
     let vocab_path = Path::new(&weights_dir).join("rwkv_vocab_v20230424.txt");
     let tokenizer = WorldTokenizer::load(&vocab_path);
     let config = Rwkv7Config::from_weights_dir(&weights_dir);
-    let model = Rwkv7Model::load(&model_path, config);
+    let mut model = Rwkv7Model::load(&model_path, config);
     let v = model.config.vocab_size;
+
+    // Apply embedding surgery if requested
+    if let Some(ref method) = emb_surgery {
+        model.embedding_surgery(method);
+    }
 
     // Tokenize
     let tokens = tokenizer.encode(input_slice);

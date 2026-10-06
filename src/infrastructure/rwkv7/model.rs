@@ -321,6 +321,142 @@ impl Rwkv7Model {
         Self { config, emb, layers, ln_out_w, ln_out_b, head_w }
     }
 
+    /// Analyze and optionally modify byte-token embeddings (rows 0-255).
+    ///
+    /// Methods:
+    /// - "analyze": print stats only, no modification
+    /// - "norm": equalize byte embedding norms to match text-token median
+    /// - "center": blend byte embeddings toward global centroid (alpha=0.3)
+    /// - "spread": decorrelate byte embeddings via mean-shift + variance scaling
+    pub fn embedding_surgery(&mut self, method: &str) {
+        let d = self.config.n_embd;
+        let v = self.config.vocab_size;
+
+        // Compute norms for byte tokens (0-255) and text tokens (256+)
+        let mut byte_norms = Vec::with_capacity(256);
+        let mut text_norms = Vec::with_capacity(v - 256);
+        for row in 0..v {
+            let start = row * d;
+            let norm: f32 = self.emb.data[start..start + d].iter()
+                .map(|x| x * x).sum::<f32>().sqrt();
+            if row < 256 {
+                byte_norms.push(norm);
+            } else {
+                text_norms.push(norm);
+            }
+        }
+
+        // Compute centroids
+        let mut byte_centroid = vec![0.0f32; d];
+        for row in 0..256 {
+            let start = row * d;
+            for j in 0..d {
+                byte_centroid[j] += self.emb.data[start + j];
+            }
+        }
+        for j in 0..d { byte_centroid[j] /= 256.0; }
+
+        let mut global_centroid = vec![0.0f32; d];
+        for row in 0..v {
+            let start = row * d;
+            for j in 0..d {
+                global_centroid[j] += self.emb.data[start + j];
+            }
+        }
+        for j in 0..d { global_centroid[j] /= v as f32; }
+
+        // Stats
+        let byte_mean_norm = byte_norms.iter().sum::<f32>() / 256.0;
+        let text_mean_norm = text_norms.iter().sum::<f32>() / text_norms.len() as f32;
+        let mut sorted_text = text_norms.clone();
+        sorted_text.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let text_median_norm = sorted_text[sorted_text.len() / 2];
+        let mut sorted_byte = byte_norms.clone();
+        sorted_byte.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let byte_median_norm = sorted_byte[128];
+
+        // Byte embedding variance (how spread out are they?)
+        let byte_var: f32 = (0..256).map(|row| {
+            let start = row * d;
+            self.emb.data[start..start + d].iter()
+                .zip(byte_centroid.iter())
+                .map(|(x, c)| (x - c) * (x - c))
+                .sum::<f32>()
+        }).sum::<f32>() / 256.0;
+
+        // Centroid distance
+        let centroid_dist: f32 = byte_centroid.iter().zip(global_centroid.iter())
+            .map(|(b, g)| (b - g) * (b - g)).sum::<f32>().sqrt();
+
+        // ASCII (32-126) vs non-ASCII (128-255) norms
+        let ascii_mean: f32 = byte_norms[32..127].iter().sum::<f32>() / 95.0;
+        let nonascii_mean: f32 = byte_norms[128..256].iter().sum::<f32>() / 128.0;
+
+        eprintln!("[emb-surgery] analysis:");
+        eprintln!("  byte norms:   mean={:.3}, median={:.3}, min={:.3}, max={:.3}",
+                  byte_mean_norm, byte_median_norm, sorted_byte[0], sorted_byte[255]);
+        eprintln!("  text norms:   mean={:.3}, median={:.3}",
+                  text_mean_norm, text_median_norm);
+        eprintln!("  ascii mean:   {:.3} (32-126), non-ascii: {:.3} (128-255)",
+                  ascii_mean, nonascii_mean);
+        eprintln!("  byte var:     {:.4}", byte_var);
+        eprintln!("  centroid dist: {:.4} (byte centroid vs global centroid)", centroid_dist);
+        eprintln!("  norm ratio:   {:.3} (byte/text)", byte_mean_norm / text_mean_norm);
+
+        match method {
+            "analyze" => {
+                eprintln!("[emb-surgery] analyze only — no modifications");
+            }
+            "norm" => {
+                // Equalize byte embedding norms to text median
+                let target = text_median_norm;
+                eprintln!("[emb-surgery] norm equalization: target={:.3}", target);
+                for row in 0..256 {
+                    let norm = byte_norms[row];
+                    if norm > 1e-8 {
+                        let scale = target / norm;
+                        let start = row * d;
+                        for j in 0..d {
+                            self.emb.data[start + j] *= scale;
+                        }
+                    }
+                }
+            }
+            s if s.starts_with("center") => {
+                // Blend byte embeddings toward global centroid
+                // Format: "center" (default alpha=0.3) or "center0.5" (custom alpha)
+                let alpha: f32 = if s.len() > 6 {
+                    s[6..].parse().unwrap_or(0.3)
+                } else {
+                    0.3
+                };
+                eprintln!("[emb-surgery] center blend: alpha={}", alpha);
+                for row in 0..256 {
+                    let start = row * d;
+                    for j in 0..d {
+                        self.emb.data[start + j] = (1.0 - alpha) * self.emb.data[start + j]
+                            + alpha * global_centroid[j];
+                    }
+                }
+            }
+            "spread" => {
+                // Increase variance of byte embeddings around their centroid
+                let scale = 1.5f32;
+                eprintln!("[emb-surgery] spread: scale={}", scale);
+                for row in 0..256 {
+                    let start = row * d;
+                    for j in 0..d {
+                        let delta = self.emb.data[start + j] - byte_centroid[j];
+                        self.emb.data[start + j] = byte_centroid[j] + scale * delta;
+                    }
+                }
+            }
+            _ => {
+                eprintln!("[emb-surgery] unknown method '{}' — no modification", method);
+            }
+        }
+    }
+
     /// Create a pre-allocated scratch workspace for zero-alloc forward passes.
     pub fn create_scratch(&self) -> Scratch {
         let d = self.config.n_embd;

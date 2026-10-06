@@ -22,6 +22,7 @@
 | Phase 2 — LSTM mixer hybrid (100KB) | 1.2549 | -0.0375 vs logistic, -0.0435 vs baseline |
 | Phase 2 — Hierarchical groups (100KB) | **1.2272** | -0.0277 vs flat LSTM, groups: [0-2][3-8][RWKV] |
 | Phase 3 — Match model (100KB) | **1.2177** | -0.0095 additional, hash-based longest match |
+| R27 — Embedding surgery center0.3 (100KB) | **1.1895** | -0.0282 additional, zero runtime cost |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval. Full enwik8 feasible: 138 B/s → ~8.4 days.
@@ -41,7 +42,8 @@
 1.29  azathoth-lm hybrid logistic CM+RWKV (100KB)
 1.25  azathoth-lm LSTM hybrid CM+RWKV (100KB)
 1.23  azathoth-lm hierarchical groups (100KB)
-1.22  azathoth-lm hierarchical + match model (100KB) ← CURRENT BEST
+1.22  azathoth-lm hierarchical + match model (100KB)
+1.19  azathoth-lm + emb surgery center0.3 (100KB) ← CURRENT BEST
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
 1.17  cmix        (2077 models + LSTM)
@@ -60,7 +62,8 @@
 
 | Metric | Value | Date |
 |---|---|---|
-| **BPB hierarchical+match (enwik8 100KB)** | **1.2177** | **2026-10-06** |
+| **BPB emb-surgery center0.3 (enwik8 100KB)** | **1.1895** | **2026-10-06** |
+| BPB hierarchical+match (enwik8 100KB) | 1.2177 | 2026-10-06 |
 | BPB hierarchical only (enwik8 100KB) | 1.2272 | 2026-10-06 |
 | BPB LSTM flat hybrid (enwik8 100KB) | 1.2549 | 2026-10-06 |
 | BPB logistic hybrid (enwik8 100KB) | 1.2924 | 2026-10-05 |
@@ -114,7 +117,8 @@ See `docs/research/r23-cross-domain-validation.md`.
 | + hybrid CM+RWKV bridge | 1.4133 | 1.2924 | 2026-10-05 |
 | + LSTM mixer | 1.5252 | 1.2549 | 2026-10-06 |
 | + hierarchical groups | 1.2502 | 1.2272 | 2026-10-06 |
-| + match model | 1.2408 | **1.2177** | 2026-10-06 |
+| + match model | 1.2408 | 1.2177 | 2026-10-06 |
+| + emb surgery center0.3 | — | **1.1895** | 2026-10-06 |
 
 ## Phase 0 Details
 
@@ -345,9 +349,9 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
   See `docs/research/r26-moe-architecture-research.md`.
 
 ### Next
-- **Dynamic MoE**: Regime-based expert routing (text/binary/structured)
-- **MambaByte integration**: 353M byte-level SSM as binary-domain expert
-- **Embedding surgery**: Direct weight manipulation for byte-token calibration
-- **Silesia 100KB eval**: Scale to medium eval for robust Weissman Scores
-- Full enwik8 evaluation with hierarchical+match configuration
-- Full SA-PPM with suffix array (upgrade from hash-based match model)
+- **Indirect context models (ICM)**: Target bits 3-5 bottleneck (est. -0.02 to -0.05)
+- **APM post-mixer correction**: Adaptive probability map after LSTM (est. -0.01)
+- **Match model upgrade**: Checksums, LRU eviction, confidence weighting
+- **RWKV bypass for binary**: Skip RWKV when bytes/token < 1.5
+- Full enwik8 evaluation with best config (~8 days)
+- Full SA-PPM with suffix array

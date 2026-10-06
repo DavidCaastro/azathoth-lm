@@ -1,7 +1,7 @@
 # Roadmap — azathoth-lm
 
 **Date**: 2026-10-06
-**Current best**: 1.2177 BPB (100KB enwik8), 138 B/s (hierarchical + match model)
+**Current best**: 1.1895 BPB (100KB enwik8), ~115 B/s (hierarchical + match + emb surgery)
 **Target**: < 1.0 BPB — universal compressor, measured on enwik8
 
 ## Design Philosophy
@@ -25,7 +25,7 @@ Principles:
 ## Current Position
 
 ```
-1.22  azathoth-lm   (0.1B RWKV + 9 CM + match + hierarchical LSTM, 138 B/s)
+1.19  azathoth-lm   (0.1B RWKV + 9 CM + match + hier LSTM + emb surgery, ~115 B/s)
 1.27  PAQ8px        (200+ byte-level CM, universal)
 1.19  NNCP v3       (199M Transformer-XL)
 1.17  cmix          (2077 byte-level models + LSTM mixer, universal)
@@ -234,27 +234,29 @@ Projected                           Actual
 1.2549  LSTM flat hybrid
 1.2272  + hierarchical grouping (-0.0277)
 1.2177  + match model (-0.0095)
+1.1895  + embedding surgery center0.3 (-0.0282)
 ```
 
-### Remaining Trajectory (from 1.2177)
+### Remaining Trajectory (from 1.1895)
 
 Optimistic:
 ```
-1.2177  current (100KB enwik8, hierarchical + match)
-1.19    + full enwik8 (more match history, LSTM convergence)
-1.16    + more CM models (20-30 orders/types)
-1.03    + full SA-PPM with suffix array (-0.13)
+1.1895  current (100KB enwik8, hierarchical + match + emb surgery)
+1.16    + ICM models for bits 3-5 (-0.03)
+1.15    + APM post-mixer + match upgrade (-0.01)
+1.12    + full enwik8 (more match history, LSTM convergence)
+1.00    + full SA-PPM with suffix array (-0.12)
 ```
 
 Conservative:
 ```
-1.2177  current
-1.20    + full enwik8 (-0.02)
-1.18    + more CM models (-0.02)
+1.1895  current
+1.17    + ICM + APM (-0.02)
+1.15    + full enwik8 (-0.02)
 ```
 
-The < 1.0 target likely requires full SA-PPM with suffix array
-(not just hash-based matching) or a larger neural predictor.
+The < 1.0 target now within ~0.19 BPB. Full SA-PPM remains the
+highest-impact remaining technique.
 P3.2 (domain checkpoint) is blocked by GPU hardware.
 
 ## Completed
@@ -277,6 +279,7 @@ P3.2 (domain checkpoint) is blocked by GPU hardware.
 | P3.1: Match model (simplified SA-PPM) | **1.2177 BPB** (100KB), -0.0095 additional, 138 B/s | 2026-10-06 |
 | P2.3: Cross-domain (initial) | 5 domains tested, σ=0.964, adversarial PASS | 2026-10-06 |
 | P2.3: Silesia Corpus eval | 12 files, mean 2.29 BPB, σ=1.72, Weissman=4.9 | 2026-10-06 |
+| R27: Embedding surgery center0.3 | **1.1895 BPB** (100KB), -0.0282 additional, zero cost | 2026-10-06 |
 | P3.2: Domain checkpoint | BLOCKED — requires GPU (i5-1235U CPU only) | 2026-10-06 |
 
 ## Constraints
