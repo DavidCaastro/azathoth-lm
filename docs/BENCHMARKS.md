@@ -42,12 +42,16 @@ See `docs/research/r28-composite-metric-debias.md` for full justification.
 
 | Tier | Files | Time | When | Decision role |
 |---|---|---|---|---|
-| **T1 Quick** | enwik8 10KB + dickens + samba + mozilla (10KB each) | ~5 min | Per milestone | Accept/reject gate |
+| **T1 Quick** | enwik8 + dickens + samba + mozilla + OEIS (10KB each) | ~8 min | Per milestone | Accept/reject gate |
 | **T2 Standard** | enwik8 100KB + all 12 Silesia (10KB each) | ~30 min | Per phase | Full composite |
 | **T3 Full** | enwik8 100MB + Silesia full + adversarial + baselines | ~8+ days | Per release | Publication |
 
-T1 covers three distinct data regimes (text, code, binary) with minimum time.
+T1 covers four distinct data regimes (text, code, binary, numerical) with minimum time.
 T1 is the **mandatory** gate for every code change. No enwik8-only decisions.
+
+OEIS integer sequences (https://oeis.org/stripped.gz) added per R29: pure numerical
+data is a genuinely distinct regime — low Shannon entropy (3.5 bpB) but high
+compressed BPB due to near-uniform digit distribution. See R29 for full analysis.
 
 ## Eje 1 — Cross-Domain Compression (BPB by data type)
 

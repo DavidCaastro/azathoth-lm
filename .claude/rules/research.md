@@ -96,7 +96,7 @@ Ver `docs/research/r28-composite-metric-debias.md` para justificacion.
 
 | Tier | Archivos | Tiempo | Cuando |
 |---|---|---|---|
-| Quick (T1) | enwik8 10KB + dickens + samba + mozilla (10KB c/u) | ~5 min | Per milestone |
+| Quick (T1) | enwik8 + dickens + samba + mozilla + OEIS (10KB c/u) | ~8 min | Per milestone |
 | Standard (T2) | enwik8 100KB + 12 Silesia (10KB c/u) | ~30 min | Per phase |
 | Full (T3) | enwik8 100MB + Silesia full + adversarial | ~8+ dias | Per release |
 

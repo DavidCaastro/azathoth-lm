@@ -78,16 +78,17 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 
 ## Benchmark Dashboard
 
-### Current Best — Composite (Tier 1: enwik8+dickens+samba+mozilla, 10KB each)
+### Current Best — Composite (Tier 1: 5 files, 10KB each)
 
 | Metric | With surgery | Pre-surgery | Delta | Verdict |
 |---|---|---|---|---|
-| **mean** | **1.4255** | 1.4595 | **-0.0340** | DOWN |
-| **sigma** | **0.2423** | 0.2530 | **-0.0107** | DOWN |
-| **worst** | **1.7227** (mozilla) | 1.7673 | **-0.0446** | DOWN |
+| **mean** | **1.5213** | 1.5595 | **-0.0382** | DOWN |
+| **sigma** | **0.2814** | 0.2923 | **-0.0109** | DOWN |
+| **worst** | **1.9045** (OEIS) | 1.9596 | **-0.0551** | DOWN |
 
 Surgery center0.3 is a **universal improvement**: all three composite
-metrics improve. No domain-specific bias detected.
+metrics improve across all 5 domains (text, code, binary, numerical).
+Largest gain on OEIS numerical data (-0.0551), smallest on enwik8 text (-0.0228).
 
 #### Tier 1 Detail (with emb surgery center0.3)
 
@@ -97,6 +98,7 @@ metrics improve. No domain-specific bias detected.
 | dickens (10KB) | Text EN | **1.5766** | 1.6154 | -0.0388 |
 | samba (10KB) | Code | **1.1846** | 1.2143 | -0.0297 |
 | mozilla (10KB) | Binary | **1.7227** | 1.7673 | -0.0446 |
+| OEIS (10KB) | Numerical | **1.9045** | 1.9596 | -0.0551 |
 
 ### Full Silesia Composite (Tier 2, pre-surgery baseline)
 

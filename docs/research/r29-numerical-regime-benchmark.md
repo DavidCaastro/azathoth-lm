@@ -199,6 +199,54 @@ trained) and generic CM (collision-prone on small alphabets) are weakest.
 Adding OEIS to Tier 1 structurally prevents numerical-blindness the same way
 adding mozilla prevents binary-blindness.
 
+## Evaluation Results
+
+OEIS integrated into Tier 1 and evaluated (10KB, first 10000 bytes of stripped):
+
+| Config | BPB |
+|---|---|
+| Without surgery | 1.9596 |
+| With surgery center0.3 | **1.9045** |
+| Delta | **-0.0551** |
+
+Surgery produces the LARGEST improvement on OEIS (-0.0551) compared to all other
+domains (enwik8 -0.0228, dickens -0.0388, samba -0.0297, mozilla -0.0446).
+This confirms that embedding surgery is a universal technique — it helps MORE
+on non-text data, not less.
+
+### Updated Tier 1 Composite (5 files, with surgery)
+
+| Metric | Value |
+|---|---|
+| mean | **1.5213** |
+| sigma | **0.2814** |
+| worst | **1.9045** (OEIS) |
+| best | 1.1846 (samba) |
+| range | 0.7199 |
+
+### Observations
+
+1. **OEIS at 1.9045 BPB is worse than mozilla (1.7227)** — confirming that
+   numerical data is genuinely challenging despite low Shannon entropy
+2. **7264 tokens for 10KB** — high token count because digits are individual
+   tokens in World tokenizer. Each comma-separated integer is multiple tokens.
+3. **34 B/s throughput** — slowest of all Tier 1 files, likely because high
+   token count means more RWKV forward passes per byte
+4. **Surgery helps most here** — blending byte embeddings toward the centroid
+   makes digit predictions more conservative (less overconfident wrong answers)
+
+### Regime confirmed distinct
+
+OEIS falls between mozilla (binary, 1.72) and ooffice (DLL, 2.66) in the
+Silesia ranking, but its byte-level characteristics are unique:
+- Only 16 active bytes (digits + comma + newline + A + space + hash)
+- Near-uniform digit distribution within the active alphabet
+- No grammar, no syntax, no long-range text patterns
+- Structural pattern: A-number prefix followed by comma-separated values
+
+This is NOT binary (which has 256 active bytes) and NOT text (which has
+grammar). It is a genuinely distinct fourth regime.
+
 ## References
 
 - [OEIS Download](https://oeis.org/wiki/Download)
