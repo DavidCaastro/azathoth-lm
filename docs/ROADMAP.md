@@ -23,12 +23,12 @@ Principles:
 
 ```
 1.19  azathoth-lm   (0.1B RWKV + 12 CM + match + hier LSTM + emb surgery)
-1.27  PAQ8px        (200+ byte-level CM, universal)
+1.27  PAQ8px v217   (200+ byte-level CM, 3-layer mixer, universal)
 1.19  NNCP v3       (199M Transformer-XL)
-1.17  cmix          (2077 byte-level models + LSTM mixer, universal)
+1.17  cmix v21      (2077 CM + 2x200 LSTM BPTT=100, universal)
 1.11  ts_zip        (RWKV-169M v4 Q8, pure LM)
-0.97  fx2-cmix      (6M Transformer + 2000+ CM, universal)
-0.94  Nacrith       (135M SmolLM2 + byte-level CM, universal)
+0.97  fx2-cmix-T    (6M Transformer Q4 + 2000+ CM, Hutter Prize Jul 2026)
+0.94  Nacrith       (135M SmolLM2 + CM + Hedge mixer, universal)
 ```
 
 Gap to target: ~0.19 BPB. Tied with NNCP, below PAQ8px.
@@ -41,11 +41,15 @@ Input bytes
     ├─→ CM orders 0-2 → logistic sub-mixer → Group 0 (short ctx)
     ├─→ CM orders 3-8 + sparse + ICM → logistic sub-mixer → Group 1 (long ctx)
     ├─→ MatchModel (ctx 4-128) → bit preds (Group 3: match)
-    └──────────── Top LSTM (H=128, 67K params) → final P(bit=1)
+    └──────────── Top LSTM (H=128, 67K params, BPTT=1) → final P(bit=1)
 ```
 
-Feature-complete. Remaining gap: **scale** (12+match vs 200+ models)
-and **full SA-PPM** (suffix array for optimal matching).
+### Key Gap vs Competition (R34 finding)
+
+The #1 architectural deficit is NOT model count — it is **LSTM mixer depth**.
+cmix uses BPTT=100 + Adam + LayerNorm + coupled gates. Our BPTT=1 makes the
+LSTM essentially a feedforward net with persistent state. Closing this gap
+is the highest-impact single action.
 
 ### Composite Baseline (Tier 1, 10KB each, with emb surgery center0.3)
 
@@ -62,32 +66,42 @@ and **full SA-PPM** (suffix array for optimal matching).
 
 ## What's Next
 
-### Tier A — Highest impact (implement next)
+### Tier S — Critical path (implement first)
 
-| # | Action | Est. Delta | Risk | Rationale |
+The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
+
+| # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| A1 | Scale CM 9→25+ models | -0.05 to -0.10 | High | Biggest gap vs competition. Gleipnir=27 CM, no neural→1.27. Add ICM, SparseModel, WordModel, RecordModel, higher-order match. |
-| A2 | APM/SSE post-LSTM chain | -0.01 to -0.04 | Low | Parallel APMs averaged (NOT chained). Proven in every top compressor. |
+| S1 | LSTM: coupled gates (i=1-f) | -0.00 to -0.01 | Low | -25% params, stabilizes cell state. cmix uses it. Prerequisite. |
+| S2 | LSTM: LayerNorm | -0.005 to -0.015 | Med | Per-gate normalization with learnable gamma/beta. Prerequisite for BPTT>1. |
+| S3 | LSTM: BPTT=8 (1 full byte) | -0.02 to -0.05 | High | **Gap #1 vs cmix.** Needs Adam optimizer + grad clip. First real temporal learning. |
+| S4 | WordModel (case-folded + word-pair) | -0.005 to -0.015 | Med | Only model type we're missing that every top compressor uses. Gleipnir case-folds to "prevent halving evidence." |
 
-### Tier B — Medium impact, low effort
+### Tier A — High impact
 
-| # | Action | Est. Delta | Risk | Rationale |
+| # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| B1 | LSTM improvements | -0.01 to -0.03 | Low | Coupled gates (i=1-f), layer norm, L2 reg. Direct code changes. cmix uses all three. |
-| B2 | Hedge mixer experiment | -0.005 to -0.02 | Low | Multiplicative weights (Nacrith). Quick A/B test vs current SGD. |
+| A1 | APM/SSE 1-2 stages (distinct ctx) | -0.005 to -0.020 | Low | cmix uses SSE post-LSTM. Heritage SSE failure was ctx-reuse, not fundamental. Chained with distinct contexts works (Gleipnir 11 stages). |
+| A2 | Match model multi-input | -0.005 to -0.015 | Low | Add more context lengths (3,5,10,12,20,48) + feed multiple match predictions as separate mixer inputs. Replaces SA-PPM at 5% effort. |
+| A3 | Tweedie denoising (Midicoth) | -0.01 to -0.03 | Med | Post-blend Tweedie empirical Bayes. Binary tree byte decomposition. Zero runtime cost. Paper March 2026. Do NOT combine with SSE (interference). |
 
-### Tier C — Medium impact, medium effort
+### Tier B — Medium impact
 
-| # | Action | Est. Delta | Risk | Rationale |
+| # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| C1 | ISSE chains | -0.02 to -0.04 | Med | Indirect secondary symbol estimation. Gleipnir's lightweight refinement. |
-| C2 | Micro-diffusion denoising | -0.01 to -0.03 | Med | Parameter-free post-processing. Binary tree byte decomposition + Tweedie correction. |
+| B1 | LSTM: 2 layers × 128 | -0.01 to -0.03 | Med | After BPTT>1 works. cmix uses 2×200. |
+| B2 | BPTT scaling to 16-32 | -0.01 to -0.03 | Med | Incremental after BPTT=8 is stable. |
+| B3 | ISSE chains (3-5 stages) | -0.01 to -0.025 | Med | Gleipnir's core innovation. More expressive than APM, cheaper than LSTM. |
+| B4 | Higher-order CM (orders 12, 16) | -0.005 to -0.01 | Low | Gleipnir uses up to order 16. Small tables (1.5 MB each). |
+| B5 | WRT preprocessing (256→~205 symbols) | -0.01 to -0.03 | Med | fx2-cmix (Hutter Prize winner) uses it. Word Reducing Transform. |
 
-### Tier D — High impact, high effort
+### Tier C — Lower priority / speculative
 
-| # | Action | Est. Delta | Risk | Rationale |
+| # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| D1 | Full SA-PPM (suffix array) | -0.10 to -0.30 | High | Unifies all context matching. ~400 MB RAM for enwik8. |
+| C1 | Online LSTM expert (RATA-CMIX style) | -0.01 to -0.03 | High | 2×200 LSTM as predictor (not mixer). Generates own probabilities alongside RWKV. |
+| C2 | Information inheritance between CM orders | -0.005 to -0.01 | Med | Lower-order estimates feed higher-order models (Chained Neural Predictors, April 2026). |
+| C3 | Modality-routing (OmniZip-inspired) | -0.05 to -0.15 | High | Learned routing for binary data. Our binary BPB (3.52 mean) is 3x worse than text. |
 
 ### Blocked
 
@@ -95,6 +109,15 @@ and **full SA-PPM** (suffix array for optimal matching).
 |---|---|---|
 | E1 | Domain checkpoint (fine-tune RWKV) | Requires GPU |
 | E2 | Larger neural model (0.4B+) | No checkpoint outperforms 0.1B on enwik8 |
+| E3 | Domain-trained small TF (fx2-cmix style) | Requires GPU for pre-training |
+
+### Killed / Deprioritized (with justification)
+
+| # | Action | Original Est. | Why killed | Source |
+|---|---|---|---|---|
+| ~~A1 old~~ | CM scaling 9→25+ models | -0.05 to -0.10 | Model count not bottleneck. R33 showed +0.0027 (neutral). Quality/diversity > quantity. WordModel is the ONE missing model. | R34 |
+| ~~B2 old~~ | Hedge mixer experiment | -0.005 to -0.02 | Nacrith ablation: Hedge converges to w_llm≈1.0 (pass-through). Not useful when models have comparable strength. | R34 |
+| ~~D1~~ | Full SA-PPM (suffix array) | -0.10 to -0.30 | Revised to -0.01 to -0.05. No top compressor uses suffix arrays. ppmonstr order-64 ≈ PPMd order-16. Match improvements capture 80% at 5% effort. | R34 |
 
 ## Completed Summary
 
@@ -114,35 +137,38 @@ and **full SA-PPM** (suffix array for optimal matching).
 | R30 | Frontier research + roadmap reform | T2 surgery + data-driven priorities | **DONE** |
 | R31 | Pretrained symbiosis research | No 2nd neural; CM scaling is the path | **DONE** |
 | R32 | G1d 0.1B checkpoint eval | +0.0693 enwik8, +0.3324 samba | **KILLED** |
-| R33 | CM scaling A1 Phase 1 | -0.0042 BPB (12 models, sparse+ICM) | **DONE** |
+| R33 | CM scaling A1 Phase 1 | +0.0027 BPB 100KB (neutral on text) | **DONE** |
+| R34 | Roadmap audit + 5-thread research | LSTM depth is #1 gap, not CM count | **DONE** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
 ## Remaining Trajectory (enwik8, from 1.1895)
 
-Optimistic:
+Optimistic (research-backed estimates from R34):
 ```
 1.1895  current
-1.13    + CM scaling 9→25 models (-0.06)
-1.10    + APM/SSE chain + LSTM improvements (-0.03)
-1.08    + full enwik8 (more history, LSTM convergence)
-1.00    + full SA-PPM with suffix array (-0.08)
+1.17    + LSTM stack: coupled gates + LayerNorm + BPTT=8 (-0.02)
+1.15    + WordModel + APM/SSE (-0.02)
+1.12    + Tweedie + match improvements + higher orders (-0.03)
+1.08    + BPTT=32 + 2 layers + WRT (-0.04)
+1.05    ceiling without GPU (optimistic)
 ```
 
 Conservative:
 ```
 1.1895  current
-1.15    + CM scaling + APM (-0.04)
-1.13    + full enwik8 (-0.02)
+1.17    + LSTM improvements (-0.02)
+1.15    + WordModel + APM (-0.02)
+1.13    + full enwik8 convergence (-0.02)
 ```
 
-< 1.0 requires SA-PPM or larger neural predictor (blocked by GPU).
-See R30 for frontier research justifying these estimates.
+Sub-1.0 requires domain-tuned neural model (GPU) or breakthrough in
+online adaptation. See R34 for research justifying revised estimates.
 
 ## Constraints
 
 - **CPU-only**: i5-1235U (Alder Lake), 12 threads, 32 GB DDR5, no GPU
-- **RAM budget**: ~16 GB for inference (RWKV ~130 MB Q8, CM ~78 MB, match ~32 MB)
-- **Throughput**: ~34-138 B/s depending on data type, full enwik8 ≈ 8.4 days
+- **RAM budget**: ~16 GB for inference (RWKV ~130 MB Q8, CM ~86 MB, match ~32 MB)
+- **Throughput**: ~90-138 B/s depending on data type, full enwik8 ≈ 8-13 days
 - **Max 1 heavy task**: concurrent evaluations cause CPU thrashing
 - **Zero external deps**: all code must compile with rustc + stdlib only

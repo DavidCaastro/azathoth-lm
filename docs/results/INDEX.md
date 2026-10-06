@@ -73,9 +73,10 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 1.07  SHA-RNN     (63M params)
 0.97  fx2-cmix    (6M Transformer + 2000+ CM)
 0.94  Nacrith     (135M SmolLM2 + CM)
-~1.19 ← PROJECTED azathoth-lm (+ full enwik8 + more CM models)
-~1.03 ← PROJECTED azathoth-lm (+ full SA-PPM with suffix array, optimistic)
-<1.0  ← OUR TARGET (likely requires full SA-PPM or larger neural predictor)
+~1.17 ← PROJECTED azathoth-lm (+ LSTM stack: BPTT=8, coupled, LayerNorm)
+~1.08 ← PROJECTED azathoth-lm (+ WordModel + APM + Tweedie + WRT, optimistic)
+~1.05 ← CEILING without GPU (optimistic, R34 analysis)
+<1.0  ← OUR TARGET (requires domain-tuned neural model, blocked by GPU)
 ```
 
 ## Benchmark Dashboard
@@ -402,11 +403,20 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
 - **R26**: MoE architecture + direct weight manipulation research.
   See `docs/research/r26-moe-architecture-research.md`.
 
-### Next (R30+R31+R32 data-driven priorities)
-- ~~QUICK — Checkpoint upgrade~~: KILLED (R32). G1d +0.0693 on enwik8, +0.3324 on samba. World v2.8 remains best.
-- **A1 — Scale CM to ~25 models**: RecordModel (osdb/sao), ImageModel (x-ray/mr), ExeModel (ooffice), SparseModel, ICM, WordModel. Biggest gap (9 vs 27-2077). Est. -0.05 to -0.10
-- **A2 — APM/SSE post-LSTM chain**: Parallel APMs averaged, not chained. Est. -0.01 to -0.04
-- **B1 — LSTM improvements**: Coupled gates (i=1-f), layer norm, L2 reg. Est. -0.01 to -0.03
-- **B2 — Hedge mixer experiment**: Multiplicative weights (Nacrith). Quick A/B test
-- **D1 — Full SA-PPM**: Suffix array for optimal matching. Est. -0.10 to -0.30
-- **BLOCKED — OmniZip MoE routing**: Requires GPU for fine-tuning. Long-term after CM saturates
+### Next (R34 roadmap audit — priorities reformed)
+
+**Tier S — Critical path (LSTM stack is #1 gap vs cmix):**
+- **S1 — Coupled gates (i=1-f)**: -25% LSTM params, stabilizes cell state. Easy win.
+- **S2 — LayerNorm**: Per-gate normalization. Prerequisite for BPTT>1.
+- **S3 — BPTT=8 (1 byte)**: Needs Adam + grad clip. Est. -0.02 to -0.05. **Biggest single delta.**
+- **S4 — WordModel**: Case-folded + word-pair. Only model type we lack. Est. -0.005 to -0.015.
+
+**Tier A — High impact:**
+- **A1 — APM/SSE 1-2 stages**: Distinct contexts per stage. Est. -0.005 to -0.020
+- **A2 — Match model multi-input**: More lengths + multi-predictions. Replaces SA-PPM. Est. -0.005 to -0.015
+- **A3 — Tweedie denoising**: Post-blend Tweedie (Midicoth paper). Cannot combine with SSE.
+
+**KILLED (R34):**
+- ~~A1 old — CM scaling 9→25+~~: Model count not bottleneck. R33 neutral. Quality > quantity.
+- ~~B2 old — Hedge mixer~~: Converges to pass-through (Nacrith ablation).
+- ~~D1 — SA-PPM~~: No top compressor uses suffix arrays. Revised -0.01 to -0.05. Match improvements capture 80% at 5% effort.
