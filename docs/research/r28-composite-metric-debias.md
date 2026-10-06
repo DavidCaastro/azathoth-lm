@@ -222,6 +222,33 @@ current best configuration to establish the true starting point.
 4. Re-run Tier 1 quick eval with embedding surgery to establish composite baseline
 5. All future experiments: measure Tier 1 minimum, report composite
 
+## First Composite Evaluation: Embedding Surgery Validation
+
+Tier 1 eval (4 files, 10KB each) with and without embedding surgery center0.3:
+
+| File | Type | BPB (surgery) | BPB (pre-surgery) | Delta |
+|---|---|---|---|---|
+| enwik8 | Text EN | **1.2180** | 1.2408 | -0.0228 |
+| dickens | Text EN | **1.5766** | 1.6154 | -0.0388 |
+| samba | Code | **1.1846** | 1.2143 | -0.0297 |
+| mozilla | Binary | **1.7227** | 1.7673 | -0.0446 |
+
+Composite results:
+
+| Metric | With surgery | Pre-surgery | Delta | Verdict |
+|---|---|---|---|---|
+| **mean** | **1.4255** | 1.4595 | -0.0340 | DOWN |
+| **sigma** | **0.2423** | 0.2530 | -0.0107 | DOWN |
+| **worst** | **1.7227** | 1.7673 | -0.0446 | DOWN |
+
+**Verdict**: Embedding surgery center0.3 passes the composite gate.
+All three metrics improve. The largest improvement is on **mozilla (binary)**,
+not text — the surgery is MORE helpful for binary than for text.
+
+This validates both:
+1. The surgery itself (universal improvement, not text-biased)
+2. The composite metric methodology (would have caught a text-only bias)
+
 ## Key Insight
 
 The bias was structural, not disciplinary. Telling ourselves "measure Silesia

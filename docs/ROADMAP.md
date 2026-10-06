@@ -2,7 +2,7 @@
 
 **Date**: 2026-10-06
 **Current best (enwik8)**: 1.1895 BPB (100KB enwik8, literature ref only)
-**Current composite**: mean=2.2901 | sigma=1.7223 | worst=6.1175 (pre-surgery, needs re-eval)
+**Current composite (T1)**: mean=1.4255 | sigma=0.2423 | worst=1.7227 (with surgery, 4 files)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
 **Primary metric**: Composite BPB (mean, sigma, worst) — see R28
 

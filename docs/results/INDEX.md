@@ -78,13 +78,33 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 
 ## Benchmark Dashboard
 
-### Current Best — Composite (multi-corpus)
+### Current Best — Composite (Tier 1: enwik8+dickens+samba+mozilla, 10KB each)
+
+| Metric | With surgery | Pre-surgery | Delta | Verdict |
+|---|---|---|---|---|
+| **mean** | **1.4255** | 1.4595 | **-0.0340** | DOWN |
+| **sigma** | **0.2423** | 0.2530 | **-0.0107** | DOWN |
+| **worst** | **1.7227** (mozilla) | 1.7673 | **-0.0446** | DOWN |
+
+Surgery center0.3 is a **universal improvement**: all three composite
+metrics improve. No domain-specific bias detected.
+
+#### Tier 1 Detail (with emb surgery center0.3)
+
+| File | Type | BPB (surgery) | BPB (pre-surgery) | Delta |
+|---|---|---|---|---|
+| enwik8 (10KB) | Text EN | **1.2180** | 1.2408 | -0.0228 |
+| dickens (10KB) | Text EN | **1.5766** | 1.6154 | -0.0388 |
+| samba (10KB) | Code | **1.1846** | 1.2143 | -0.0297 |
+| mozilla (10KB) | Binary | **1.7227** | 1.7673 | -0.0446 |
+
+### Full Silesia Composite (Tier 2, pre-surgery baseline)
 
 | Metric | Value | Date | Note |
 |---|---|---|---|
-| **Composite mean** | **2.2901** | **2026-10-06** | Pre-surgery, needs re-eval |
-| **Composite sigma** | **1.7223** | **2026-10-06** | Pre-surgery, needs re-eval |
-| **Composite worst** | **6.1175 (sao)** | **2026-10-06** | Pre-surgery, needs re-eval |
+| Composite mean (12 files) | 2.2901 | 2026-10-06 | Pre-surgery |
+| Composite sigma (12 files) | 1.7223 | 2026-10-06 | Pre-surgery |
+| Composite worst | 6.1175 (sao) | 2026-10-06 | Pre-surgery |
 
 ### Current Best — enwik8 (literature comparability only)
 
