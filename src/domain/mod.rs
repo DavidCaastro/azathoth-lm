@@ -7,3 +7,4 @@ pub mod coder;
 pub mod cm;
 pub mod bridge;
 pub mod lstm_mixer;
+pub mod match_model;

@@ -1,7 +1,7 @@
 # Roadmap — azathoth-lm
 
 **Date**: 2026-10-06
-**Current best**: 1.2549 BPB (100KB enwik8), 134 B/s (LSTM hybrid CM+RWKV)
+**Current best**: 1.2177 BPB (100KB enwik8), 138 B/s (hierarchical + match model)
 **Target**: < 1.0 BPB — universal compressor, measured on enwik8
 
 ## Design Philosophy
@@ -25,7 +25,7 @@ Principles:
 ## Current Position
 
 ```
-1.25  azathoth-lm   (0.1B RWKV + 9 byte CM + LSTM mixer, 134 B/s)
+1.22  azathoth-lm   (0.1B RWKV + 9 CM + match + hierarchical LSTM, 138 B/s)
 1.27  PAQ8px        (200+ byte-level CM, universal)
 1.19  NNCP v3       (199M Transformer-XL)
 1.17  cmix          (2077 byte-level models + LSTM mixer, universal)
@@ -34,22 +34,24 @@ Principles:
 0.94  Nacrith       (135M SmolLM2 + byte-level CM, universal)
 ```
 
-Gap to target: ~0.25 BPB. **Below PAQ8px** at 100KB (-0.02 BPB).
+Gap to target: ~0.22 BPB. **Below PAQ8px** at 100KB (-0.05 BPB).
 
 ### What we have vs what we need
 
 | Component | azathoth-lm (current) | PAQ8px/cmix/Nacrith |
 |---|---|---|
 | Neural predictor | RWKV-7 0.1B Q8 (token→byte bridge) | Transformer/LM (byte-level bridge) |
-| Context models | 9 byte-level CM (orders 1-8 + unigram) | 50-2000+ (byte/bit-level) |
-| Mixer | LSTM (H=128, 71K params, BPTT=1) | LSTM / logistic multi-layer |
+| Context models | 9 byte-level CM + longest-match (4-128 bytes) | 50-2000+ (byte/bit-level) |
+| Mixer | Hierarchical: logistic sub-mixers + LSTM top (67K params) | LSTM / logistic multi-layer |
 | Entropy coder | Range coder CDF-24 (roundtrip verified) | Full arithmetic coder |
 | Operating level | Byte/bit (MSB-first decomposition) | Byte/bit |
 | Adaptation | Online SGD on all components | Online SGD on all components |
+| Match predictor | Hash-based longest match (6 context lengths, 32 MB) | Suffix array / LZ |
 
-The architecture is now **structurally complete**: neural + statistical CM +
-LSTM mixer + arithmetic coder. Remaining gap is **scale** (9 vs 200+ models)
-and **advanced mixing** (hierarchical groups, more CM diversity).
+The architecture is now **feature-complete**: neural + statistical CM +
+match model + hierarchical LSTM mixer + arithmetic coder. Remaining gap is
+**scale** (9+match vs 200+ models) and **full SA-PPM** (suffix array for
+optimal variable-length matching).
 
 ## Phase 1 — Universal Compressor Core
 
@@ -196,10 +198,10 @@ Priority: high-complexity techniques for pushing toward <1.0 BPB.
 | P1.3 | RWKV→byte bridge | enables mixing | -0.0060 BPB hybrid | **DONE** |
 | P1.4 | Confidence skip | 2-5x speed | <3% speed gain | **KILLED** |
 | P2.1 | LSTM mixer | -0.05 to -0.22 | **-0.0375 BPB** | **DONE** |
-| P2.3 | Multi-corpus validation | honesty check | — | Next |
-| P2.2 | Hierarchical groups | -0.02 to -0.05 | — | Pending |
-| P3.1 | SA-PPM | -0.10 to -0.30 | — | Pending |
-| P3.2 | Domain checkpoint | -0.10 to -0.20 | — | Pending |
+| P2.2 | Hierarchical groups | -0.02 to -0.05 | **-0.0277 BPB** | **DONE** |
+| P2.3 | Multi-corpus validation | honesty check | σ=0.964 (5 domains) | **DONE** |
+| P3.1 | Match model (simplified SA-PPM) | -0.10 to -0.30 | **-0.0095 BPB** | **DONE** |
+| P3.2 | Domain checkpoint | -0.10 to -0.20 | — | **BLOCKED** (GPU) |
 
 ## Projected Trajectory
 
@@ -226,28 +228,34 @@ Projected                           Actual
 - **Confidence skip was architectural dead end** — RWKV sequential state
   prevents skipping the dominant compute cost.
 
-### Remaining Trajectory (from 1.2549)
+### Phase 2-3 Actuals
+
+```
+1.2549  LSTM flat hybrid
+1.2272  + hierarchical grouping (-0.0277)
+1.2177  + match model (-0.0095)
+```
+
+### Remaining Trajectory (from 1.2177)
 
 Optimistic:
 ```
-1.2549  current (100KB enwik8, LSTM hybrid)
-1.23    + more CM models (20-30 orders/types)
-1.21    + hierarchical model groups (-0.02)
-1.18    + full enwik8 (LSTM improves with more data)
-1.05    + SA-PPM (-0.13)
+1.2177  current (100KB enwik8, hierarchical + match)
+1.19    + full enwik8 (more match history, LSTM convergence)
+1.16    + more CM models (20-30 orders/types)
+1.03    + full SA-PPM with suffix array (-0.13)
 ```
 
 Conservative:
 ```
-1.2549  current
-1.24    + more CM models (-0.01)
-1.22    + hierarchical groups (-0.02)
-1.20    + full enwik8 asymptotic (-0.02)
+1.2177  current
+1.20    + full enwik8 (-0.02)
+1.18    + more CM models (-0.02)
 ```
 
-The < 1.0 target likely requires SA-PPM (Phase 3) or a larger neural
-predictor. The current architecture is structurally complete but needs
-more scale (models, data) and possibly suffix-based prediction.
+The < 1.0 target likely requires full SA-PPM with suffix array
+(not just hash-based matching) or a larger neural predictor.
+P3.2 (domain checkpoint) is blocked by GPU hardware.
 
 ## Completed
 
@@ -265,11 +273,15 @@ more scale (models, data) and possibly suffix-based prediction.
 | P1.3: RWKV→byte bridge + hybrid | **1.2924 BPB** (100KB), -0.0060 vs baseline, 169 B/s | 2026-10-05 |
 | P1.4: Confidence skip | KILLED — <3% speed gain, RWKV dominates compute | 2026-10-05 |
 | P2.1: LSTM mixer | **1.2549 BPB** (100KB), -0.0375 vs logistic, 134 B/s | 2026-10-06 |
+| P2.2: Hierarchical model groups | **1.2272 BPB** (100KB), -0.0277 vs flat LSTM, 138 B/s | 2026-10-06 |
+| P3.1: Match model (simplified SA-PPM) | **1.2177 BPB** (100KB), -0.0095 additional, 138 B/s | 2026-10-06 |
+| P2.3: Cross-domain validation | 5 domains tested, σ=0.964, adversarial PASS | 2026-10-06 |
+| P3.2: Domain checkpoint | BLOCKED — requires GPU (i5-1235U CPU only) | 2026-10-06 |
 
 ## Constraints
 
 - **CPU-only**: i5-1235U (Alder Lake), 12 threads, 32 GB DDR5, no GPU
 - **RAM budget**: ~16 GB for inference (RWKV ~130 MB Q8, CM hash tables est. ~6-8 GB)
-- **Throughput**: 134 B/s LSTM hybrid (was 162 B/s logistic), full enwik8 ≈ 207h (~8.6 days)
+- **Throughput**: 138 B/s hierarchical+match (was 134 B/s flat LSTM), full enwik8 ≈ 201h (~8.4 days)
 - **Max 1 heavy task**: concurrent evaluations cause CPU thrashing
 - **Zero external deps**: all code must compile with rustc + stdlib only

@@ -19,9 +19,12 @@
 | Phase 1 — CM standalone (1MB) | 2.0915 | Beats gzip (2.58), 220K B/s |
 | Phase 1 — Hybrid CM+RWKV bridge (100KB) | **1.2924** | -0.0060 vs baseline, 169 B/s |
 | Phase 1 — Confidence skip (100KB) | KILLED | +0.0026 BPB at best, <3% speed gain |
-| Phase 2 — LSTM mixer hybrid (100KB) | **1.2549** | -0.0375 vs logistic, -0.0435 vs baseline |
+| Phase 2 — LSTM mixer hybrid (100KB) | 1.2549 | -0.0375 vs logistic, -0.0435 vs baseline |
+| Phase 2 — Hierarchical groups (100KB) | **1.2272** | -0.0277 vs flat LSTM, groups: [0-2][3-8][RWKV] |
+| Phase 3 — Match model (100KB) | **1.2177** | -0.0095 additional, hash-based longest match |
+| Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
-100KB "quick" eval. Full enwik8 now feasible: 162 B/s → ~7 days (was ~25 days at 46 B/s).
+100KB "quick" eval. Full enwik8 feasible: 138 B/s → ~8.4 days.
 
 ## Target Landscape (enwik8)
 
@@ -36,7 +39,9 @@
 1.31  azathoth-lm tuned (lr=0.30, scale=0.5, 10KB)
 1.30  azathoth-lm Q8 int-accum (eta=0.01, lr=0.30, scale=0.5, 100KB)
 1.29  azathoth-lm hybrid logistic CM+RWKV (100KB)
-1.25  azathoth-lm LSTM hybrid CM+RWKV (100KB) ← CURRENT BEST
+1.25  azathoth-lm LSTM hybrid CM+RWKV (100KB)
+1.23  azathoth-lm hierarchical groups (100KB)
+1.22  azathoth-lm hierarchical + match model (100KB) ← CURRENT BEST
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
 1.17  cmix        (2077 models + LSTM)
@@ -44,9 +49,9 @@
 1.07  SHA-RNN     (63M params)
 0.97  fx2-cmix    (6M Transformer + 2000+ CM)
 0.94  Nacrith     (135M SmolLM2 + CM)
-~1.20 ← PROJECTED azathoth-lm (+ more CM + hierarchical groups + full enwik8)
-~1.05 ← PROJECTED azathoth-lm (+ SA-PPM, optimistic)
-<1.0  ← OUR TARGET (likely requires SA-PPM or larger neural predictor)
+~1.19 ← PROJECTED azathoth-lm (+ full enwik8 + more CM models)
+~1.03 ← PROJECTED azathoth-lm (+ full SA-PPM with suffix array, optimistic)
+<1.0  ← OUR TARGET (likely requires full SA-PPM or larger neural predictor)
 ```
 
 ## Benchmark Dashboard
@@ -55,31 +60,32 @@
 
 | Metric | Value | Date |
 |---|---|---|
-| **BPB LSTM hybrid (enwik8 100KB)** | **1.2549** | **2026-10-06** |
+| **BPB hierarchical+match (enwik8 100KB)** | **1.2177** | **2026-10-06** |
+| BPB hierarchical only (enwik8 100KB) | 1.2272 | 2026-10-06 |
+| BPB LSTM flat hybrid (enwik8 100KB) | 1.2549 | 2026-10-06 |
 | BPB logistic hybrid (enwik8 100KB) | 1.2924 | 2026-10-05 |
-| bytes/s (LSTM) | **134** | **2026-10-06** |
+| bytes/s (hierarchical+match) | **138** | **2026-10-06** |
 | allocs/token | **~0** (scratch arena) | **2026-10-05** |
-| MB RAM (Q8 all layers) | **~130** | **2026-10-05** |
-| BPB/Mparam | 0.0125 | 2026-10-06 |
+| MB RAM (Q8 + CM + match) | **~240** | **2026-10-06** |
+| BPB/Mparam | 0.0122 | 2026-10-06 |
 
-### Cross-Domain (pending — requires arithmetic coder + byte-level CM)
+### Cross-Domain (initial validation — 10KB samples)
 
-Full protocol in `docs/BENCHMARKS.md`. Will measure 11 categories across
-9 data types, with σ (neutrality) and worst-domain as primary metrics.
+Full protocol in `docs/BENCHMARKS.md`. See `docs/research/r23-cross-domain-validation.md`.
 
-| Category | azathoth | zstd-19 | PAQ8px | Status |
-|---|---|---|---|---|
-| Text EN (enwik8) | 1.2549 | — | — | Measured (100KB, LSTM hybrid) |
-| Text non-EN | — | — | — | Pending |
-| Source code | — | — | — | Pending |
-| Structured (JSON) | — | — | — | Pending |
-| Executables | — | — | — | Pending |
-| Scientific | — | — | — | Pending |
-| Multimedia raw | — | — | — | Pending |
-| Mixed archive | — | — | — | Pending |
-| Pre-compressed | — | — | — | Pending |
-| **Mean** | — | — | — | — |
-| **σ (neutrality)** | — | — | — | — |
+| Category | azathoth (10KB) | Status |
+|---|---|---|
+| Text EN (enwik8) | 1.2408 | Measured |
+| Source code (Rust) | **1.2022** | Measured |
+| Executables (PE) | 3.2504 | Measured — worst domain |
+| Random (adversarial) | 8.0248 | PASS — ≈8.0 theoretical |
+| Repeated (adversarial) | 0.0459 | PASS — ≈0.0 theoretical |
+| Text non-EN | — | Pending |
+| Structured (JSON) | — | Pending |
+| Scientific | — | Pending |
+| Multimedia raw | — | Pending |
+| **Mean (real-world)** | **1.898** | text+code+binary |
+| **σ (real-world)** | **0.964** | Driven by binary domain |
 
 ### Historical (enwik8 progression)
 
@@ -91,7 +97,9 @@ Full protocol in `docs/BENCHMARKS.md`. Will measure 11 categories across
 | + mixer (eta=0.01) | 1.3032 | 1.3238 | 2026-10-02 |
 | + Q8 quantization | 1.2797 | 1.2984 | 2026-10-05 |
 | + hybrid CM+RWKV bridge | 1.4133 | 1.2924 | 2026-10-05 |
-| + LSTM mixer | 1.5252 | **1.2549** | 2026-10-06 |
+| + LSTM mixer | 1.5252 | 1.2549 | 2026-10-06 |
+| + hierarchical groups | 1.2502 | 1.2272 | 2026-10-06 |
+| + match model | 1.2408 | **1.2177** | 2026-10-06 |
 
 ## Phase 0 Details
 
@@ -312,9 +320,12 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
 ### Completed
 - **Phase 1 — Universal Core**: Arithmetic coder (P1.1), byte-level CM (P1.2),
   RWKV→byte bridge (P1.3). Confidence skip KILLED (P1.4).
-- **Phase 2.1 — LSTM Mixer**: -0.0375 BPB over logistic. New best: 1.2549.
+- **Phase 2.1 — LSTM Mixer**: -0.0375 BPB over logistic.
+- **Phase 2.2 — Hierarchical Groups**: -0.0277 BPB over flat LSTM. Best: 1.2272.
+- **Phase 3.1 — Match Model**: -0.0095 BPB additional. Best: **1.2177**.
+- **Phase 3.2 — Domain Checkpoint**: BLOCKED (requires GPU).
 
 ### Next
 - **P2.3**: Multi-corpus validation (enwik8 + Silesia/Calgary)
-- **P2.2**: Hierarchical model groups (est. -0.02 to -0.05)
-- **P3.1**: SA-PPM / suffix array predictor (est. -0.10 to -0.30)
+- Full enwik8 evaluation with hierarchical+match configuration
+- Full SA-PPM with suffix array (upgrade from hash-based match model)

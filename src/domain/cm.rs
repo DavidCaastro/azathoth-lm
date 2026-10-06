@@ -253,6 +253,13 @@ impl BitMixer {
 enum MixerKind {
     Logistic(BitMixer),
     Lstm(LstmBitMixer),
+    Hierarchical {
+        /// Group boundaries: group g spans [group_starts[g], group_starts[g+1])
+        group_starts: Vec<usize>,
+        sub_mixers: Vec<BitMixer>,
+        top_lstm: LstmBitMixer,
+        group_buf: Vec<f32>,
+    },
 }
 
 // --- Public API: ContextMixer ---
@@ -317,6 +324,36 @@ impl ContextMixer {
         }
     }
 
+    /// Create with hierarchical grouping + LSTM top mixer.
+    /// Groups: [CM orders 0-2] [CM orders 3-8] + optional [RWKV bridge].
+    /// Each group has a logistic sub-mixer. Top LSTM mixes group outputs.
+    pub fn new_with_hierarchical(hidden_dim: usize, lr: f32) -> Self {
+        let models = Self::build_models();
+        let max_history = 8;
+        // Group 0: CM orders 0-2 (short context patterns)
+        // Group 1: CM orders 3-8 (long context exact matches)
+        let group_starts = vec![0, 3, 9];
+        let n_groups = 2;
+        let sub_mixers = vec![
+            BitMixer::new(3, 0.05),
+            BitMixer::new(6, 0.05),
+        ];
+        let top_lstm = LstmBitMixer::new(n_groups, hidden_dim, lr);
+        Self {
+            models,
+            mixer: MixerKind::Hierarchical {
+                group_starts,
+                sub_mixers,
+                top_lstm,
+                group_buf: vec![0.5; n_groups],
+            },
+            history: Vec::with_capacity(max_history),
+            max_history,
+            history_len: 0,
+            pred_buf: vec![0.0f32; 9],
+        }
+    }
+
     /// Total memory used by hash tables (bytes).
     pub fn memory_bytes(&self) -> usize {
         self.models.iter().map(|m| m.memory_bytes()).sum()
@@ -327,19 +364,26 @@ impl ContextMixer {
         match &self.mixer {
             MixerKind::Logistic(_) => 0,
             MixerKind::Lstm(m) => m.param_count(),
+            MixerKind::Hierarchical { top_lstm, .. } => top_lstm.param_count(),
         }
     }
 
     /// Process one byte. Returns cost in bits (-log2 of predicted probability).
     pub fn process_byte(&mut self, byte: u8) -> f64 {
-        self.process_byte_inner(byte, None)
+        self.process_byte_inner(byte, &[])
     }
 
     /// Process one byte with external bit predictions (e.g. from RWKV bridge).
     /// `external_bit_preds[j]` = P(bit_j=1) from the external model, for j=0..7 (MSB first).
     /// These are added as an extra input to the mixer alongside the CM order models.
     pub fn process_byte_with_external(&mut self, byte: u8, external_bit_preds: &[f32; 8]) -> f64 {
-        self.process_byte_inner(byte, Some(external_bit_preds))
+        self.process_byte_inner(byte, &[external_bit_preds])
+    }
+
+    /// Process one byte with multiple external bit prediction sources.
+    /// Each entry in `externals` is a [f32; 8] of bit predictions from a different model.
+    pub fn process_byte_with_externals(&mut self, byte: u8, externals: &[&[f32; 8]]) -> f64 {
+        self.process_byte_inner(byte, externals)
     }
 
     /// Update CM state (history + hash tables) without measuring cost.
@@ -362,9 +406,10 @@ impl ContextMixer {
         self.history_len += 1;
     }
 
-    fn process_byte_inner(&mut self, byte: u8, external: Option<&[f32; 8]>) -> f64 {
+    fn process_byte_inner(&mut self, byte: u8, externals: &[&[f32; 8]]) -> f64 {
         let n_cm = self.models.len();
-        let total_inputs = if external.is_some() { n_cm + 1 } else { n_cm };
+        let n_ext = externals.len();
+        let total_inputs = n_cm + n_ext;
 
         // Ensure pred_buf is sized for total inputs
         if self.pred_buf.len() < total_inputs {
@@ -373,6 +418,17 @@ impl ContextMixer {
         match &mut self.mixer {
             MixerKind::Logistic(m) => m.extend_models(total_inputs),
             MixerKind::Lstm(m) => m.extend_models(total_inputs),
+            MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf } => {
+                let last_end = *group_starts.last().unwrap();
+                if total_inputs > last_end {
+                    let new_count = total_inputs - last_end;
+                    group_starts.push(total_inputs);
+                    sub_mixers.push(BitMixer::new(new_count, 0.05));
+                    let n_groups = sub_mixers.len();
+                    top_lstm.extend_models(n_groups);
+                    group_buf.resize(n_groups, 0.5);
+                }
+            }
         }
 
         let mut total_bits = 0.0f64;
@@ -387,9 +443,9 @@ impl ContextMixer {
                     model.predict(&self.history, self.history_len, self.max_history, c);
             }
 
-            // Append external prediction if provided
-            if let Some(ext) = external {
-                self.pred_buf[n_cm] = ext[j as usize].clamp(0.001, 0.999);
+            // Append external predictions if provided
+            for (ei, ext) in externals.iter().enumerate() {
+                self.pred_buf[n_cm + ei] = ext[j as usize].clamp(0.001, 0.999);
             }
 
             // Mix and update (dispatch by mixer type)
@@ -397,6 +453,19 @@ impl ContextMixer {
             let prediction = match &mut self.mixer {
                 MixerKind::Logistic(m) => m.predict(c, &self.pred_buf[..total_inputs]),
                 MixerKind::Lstm(m) => m.predict(&self.pred_buf[..total_inputs]),
+                MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf } => {
+                    let n_groups = sub_mixers.len();
+                    for g in 0..n_groups {
+                        let start = group_starts[g];
+                        let end = group_starts[g + 1].min(total_inputs);
+                        if end > start {
+                            group_buf[g] = sub_mixers[g].predict(c, &self.pred_buf[start..end]);
+                        } else {
+                            group_buf[g] = 0.5;
+                        }
+                    }
+                    top_lstm.predict(&group_buf[..n_groups])
+                }
             };
 
             let p_correct = if bit == 1 { prediction } else { 1.0 - prediction };
@@ -405,6 +474,17 @@ impl ContextMixer {
             match &mut self.mixer {
                 MixerKind::Logistic(m) => m.update(c, &self.pred_buf[..total_inputs], prediction, bit),
                 MixerKind::Lstm(m) => m.update(&self.pred_buf[..total_inputs], prediction, bit),
+                MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf } => {
+                    let n_groups = sub_mixers.len();
+                    top_lstm.update(&group_buf[..n_groups], prediction, bit);
+                    for g in 0..n_groups {
+                        let start = group_starts[g];
+                        let end = group_starts[g + 1].min(total_inputs);
+                        if end > start {
+                            sub_mixers[g].update(c, &self.pred_buf[start..end], group_buf[g], bit);
+                        }
+                    }
+                }
             }
 
             // Update all CM models

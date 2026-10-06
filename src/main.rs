@@ -11,6 +11,7 @@ use crate::domain::mixer::AdaptiveMixer;
 use crate::domain::coder::{Cdf, RangeEncoder, RangeDecoder};
 use crate::domain::cm::ContextMixer;
 use crate::domain::bridge::{ByteBridge, byte_probs_to_bit_preds};
+use crate::domain::match_model::MatchModel;
 use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot};
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
@@ -41,7 +42,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--lstm-hidden N] [--lstm-lr F]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -387,6 +388,8 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut max_bytes: usize = 0;
     let mut skip_threshold: f32 = 0.0;
     let mut use_lstm = false;
+    let mut use_hierarchical = false;
+    let mut use_match = false;
     let mut lstm_hidden: usize = 128;
     let mut lstm_lr: f32 = 0.002;
 
@@ -398,6 +401,8 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
             "--skip" => { i += 1; skip_threshold = args[i].parse().unwrap(); }
             "--lstm" => { use_lstm = true; }
+            "--hierarchical" => { use_hierarchical = true; }
+            "--match" => { use_match = true; }
             "--lstm-hidden" => { i += 1; lstm_hidden = args[i].parse().unwrap(); use_lstm = true; }
             "--lstm-lr" => { i += 1; lstm_lr = args[i].parse().unwrap(); use_lstm = true; }
             _ => {}
@@ -432,7 +437,10 @@ fn cmd_hybrid_eval(args: &[String]) {
     }
 
     // Initialize components
-    let mut cm = if use_lstm {
+    let mut cm = if use_hierarchical {
+        eprintln!("[hybrid] hierarchical mixer: hidden={}, lr={}", lstm_hidden, lstm_lr);
+        ContextMixer::new_with_hierarchical(lstm_hidden, lstm_lr)
+    } else if use_lstm {
         eprintln!("[hybrid] LSTM mixer: hidden={}, lr={}", lstm_hidden, lstm_lr);
         ContextMixer::new_with_lstm(lstm_hidden, lstm_lr)
     } else {
@@ -441,13 +449,18 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut bridge = ByteBridge::new(&tokenizer);
     let cm_mem_mb = cm.memory_bytes() as f64 / (1024.0 * 1024.0);
     let mixer_params = cm.mixer_param_count();
-    let mixer_str = if use_lstm {
+    let mixer_str = if use_hierarchical {
+        format!("hierarchical(H={},lr={}, {}params)", lstm_hidden, lstm_lr, mixer_params)
+    } else if use_lstm {
         format!("LSTM(H={},lr={}, {}params)", lstm_hidden, lstm_lr, mixer_params)
     } else {
         "logistic".to_string()
     };
-    eprintln!("[hybrid] CM: 9 orders, {:.1} MB | mixer: {} | trie: {} nodes",
-              cm_mem_mb, mixer_str, bridge.node_count());
+    let mut match_model = if use_match { Some(MatchModel::new()) } else { None };
+    let match_mem_mb = match_model.as_ref().map(|m| m.memory_bytes() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+    eprintln!("[hybrid] CM: 9 orders, {:.1} MB | mixer: {} | trie: {} nodes{}",
+              cm_mem_mb, mixer_str, bridge.node_count(),
+              if use_match { format!(" | match: {:.1} MB", match_mem_mb) } else { String::new() });
 
     let mut state = Rwkv7State::new(&model.config);
     let mut scratch = model.create_scratch();
@@ -504,6 +517,9 @@ fn cmd_hybrid_eval(args: &[String]) {
                     total_bits += bits_per_byte;
                     // Update CM history so it doesn't lose context
                     cm.observe_byte(byte);
+                    if let Some(ref mut mm) = match_model {
+                        mm.observe(byte);
+                    }
                     byte_count += 1;
 
                     if byte_count % report_interval == 0 || byte_count == total_bytes {
@@ -527,8 +543,17 @@ fn cmd_hybrid_eval(args: &[String]) {
                 for &byte in tok_bytes {
                     let byte_probs = bridge.byte_probs();
                     let rwkv_bit_preds = byte_probs_to_bit_preds(&byte_probs, byte);
-                    let bits = cm.process_byte_with_external(byte, &rwkv_bit_preds);
+                    let bits = if let Some(ref mm) = match_model {
+                        let (match_byte_probs, _match_len) = mm.predict();
+                        let match_bit_preds = byte_probs_to_bit_preds(&match_byte_probs, byte);
+                        cm.process_byte_with_externals(byte, &[&rwkv_bit_preds, &match_bit_preds])
+                    } else {
+                        cm.process_byte_with_external(byte, &rwkv_bit_preds)
+                    };
                     total_bits += bits;
+                    if let Some(ref mut mm) = match_model {
+                        mm.observe(byte);
+                    }
                     bridge.advance_byte(byte);
                     byte_count += 1;
 
@@ -546,8 +571,17 @@ fn cmd_hybrid_eval(args: &[String]) {
         } else {
             // First token: CM only (no RWKV context yet)
             for &byte in tok_bytes {
-                let bits = cm.process_byte(byte);
+                let bits = if let Some(ref mm) = match_model {
+                    let (match_byte_probs, _match_len) = mm.predict();
+                    let match_bit_preds = byte_probs_to_bit_preds(&match_byte_probs, byte);
+                    cm.process_byte_with_external(byte, &match_bit_preds)
+                } else {
+                    cm.process_byte(byte)
+                };
                 total_bits += bits;
+                if let Some(ref mut mm) = match_model {
+                    mm.observe(byte);
+                }
                 byte_count += 1;
             }
         }
