@@ -400,8 +400,8 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
 - **R26**: MoE architecture + direct weight manipulation research.
   See `docs/research/r26-moe-architecture-research.md`.
 
-### Next (R30+R31 data-driven priorities)
-- **QUICK — Checkpoint upgrade**: G1d 0.1B (>5T tokens + code) replaces World v2.8. Zero code changes. Est. -0.01 to -0.03
+### Next (R30+R31+R32 data-driven priorities)
+- ~~QUICK — Checkpoint upgrade~~: KILLED (R32). G1d +0.0693 on enwik8, +0.3324 on samba. World v2.8 remains best.
 - **A1 — Scale CM to ~25 models**: RecordModel (osdb/sao), ImageModel (x-ray/mr), ExeModel (ooffice), SparseModel, ICM, WordModel. Biggest gap (9 vs 27-2077). Est. -0.05 to -0.10
 - **A2 — APM/SSE post-LSTM chain**: Parallel APMs averaged, not chained. Est. -0.01 to -0.04
 - **B1 — LSTM improvements**: Coupled gates (i=1-f), layer norm, L2 reg. Est. -0.01 to -0.03
