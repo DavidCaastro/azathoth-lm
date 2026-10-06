@@ -112,6 +112,7 @@ and **full SA-PPM** (suffix array for optimal matching).
 | R28 | Composite BPB metric | (mean,σ,worst) primary | **DONE** |
 | R29 | OEIS numerical regime | 1.9045 BPB, 5th T1 file | **DONE** |
 | R30 | Frontier research + roadmap reform | T2 surgery + data-driven priorities | **DONE** |
+| R31 | Pretrained symbiosis research | No 2nd neural; CM scaling + G1d upgrade | **DONE** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 

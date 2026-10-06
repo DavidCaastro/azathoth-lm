@@ -400,10 +400,11 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
 - **R26**: MoE architecture + direct weight manipulation research.
   See `docs/research/r26-moe-architecture-research.md`.
 
-### Next (R30 data-driven priorities)
-- **N1 — Scale CM to ~25 models**: ICM, SparseModel, WordModel, RecordModel. Biggest gap vs competition (9 vs 27-2077). Est. -0.05 to -0.10
-- **N2 — APM/SSE post-LSTM chain**: Parallel APMs averaged, not chained. Est. -0.01 to -0.04
-- **N3 — LSTM improvements**: Coupled gates (i=1-f), layer norm, L2 reg. Est. -0.01 to -0.03
-- **N4 — Hedge mixer experiment**: Multiplicative weights (Nacrith). Quick A/B test
-- **M1 — Full SA-PPM**: Suffix array for optimal matching. Est. -0.10 to -0.30
-- **M2 — Full enwik8**: Validate 100KB→100MB extrapolation (~8 days)
+### Next (R30+R31 data-driven priorities)
+- **QUICK — Checkpoint upgrade**: G1d 0.1B (>5T tokens + code) replaces World v2.8. Zero code changes. Est. -0.01 to -0.03
+- **A1 — Scale CM to ~25 models**: RecordModel (osdb/sao), ImageModel (x-ray/mr), ExeModel (ooffice), SparseModel, ICM, WordModel. Biggest gap (9 vs 27-2077). Est. -0.05 to -0.10
+- **A2 — APM/SSE post-LSTM chain**: Parallel APMs averaged, not chained. Est. -0.01 to -0.04
+- **B1 — LSTM improvements**: Coupled gates (i=1-f), layer norm, L2 reg. Est. -0.01 to -0.03
+- **B2 — Hedge mixer experiment**: Multiplicative weights (Nacrith). Quick A/B test
+- **D1 — Full SA-PPM**: Suffix array for optimal matching. Est. -0.10 to -0.30
+- **BLOCKED — OmniZip MoE routing**: Requires GPU for fine-tuning. Long-term after CM saturates
