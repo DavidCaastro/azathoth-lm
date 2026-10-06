@@ -69,23 +69,38 @@
 | MB RAM (Q8 + CM + match) | **~240** | **2026-10-06** |
 | BPB/Mparam | 0.0122 | 2026-10-06 |
 
-### Cross-Domain (initial validation — 10KB samples)
+### Cross-Domain (Silesia Corpus — 10KB samples)
 
-Full protocol in `docs/BENCHMARKS.md`. See `docs/research/r23-cross-domain-validation.md`.
+Full analysis in `docs/research/r25-silesia-evaluation.md`.
 
-| Category | azathoth (10KB) | Status |
-|---|---|---|
-| Text EN (enwik8) | 1.2408 | Measured |
-| Source code (Rust) | **1.2022** | Measured |
-| Executables (PE) | 3.2504 | Measured — worst domain |
-| Random (adversarial) | 8.0248 | PASS — ≈8.0 theoretical |
-| Repeated (adversarial) | 0.0459 | PASS — ≈0.0 theoretical |
-| Text non-EN | — | Pending |
-| Structured (JSON) | — | Pending |
-| Scientific | — | Pending |
-| Multimedia raw | — | Pending |
-| **Mean (real-world)** | **1.898** | text+code+binary |
-| **σ (real-world)** | **0.964** | Driven by binary domain |
+| File | Type | BPB (10KB) | B/s | Match hits% |
+|---|---|---|---|---|
+| xml | Structured markup | **0.5886** | 54 | 98% |
+| nci | Chemical data | **0.5949** | 56 | 100% |
+| samba | Source code (C) | **1.2143** | 112 | 84% |
+| reymont | Polish text | 1.5109 | 53 | 79% |
+| dickens | English text | 1.6154 | 132 | 75% |
+| webster | English dict | 1.6241 | 91 | 78% |
+| mozilla | Executable | 1.7673 | 42 | 88% |
+| mr | Medical image | 2.0639 | 37 | 100% |
+| ooffice | Office binary | 2.6643 | 30 | 26% |
+| osdb | MySQL database | 4.3953 | 30 | 45% |
+| x-ray | Medical X-ray | 4.3251 | 24 | 4% |
+| sao | Astronomy SAO | 6.1175 | 25 | 26% |
+| **Mean (all 12)** | | **2.2901** | **57** | |
+| **σ (all 12)** | | **1.7223** | | |
+| **Mean (text-like 6)** | | **1.0247** | | |
+| **Mean (binary 6)** | | **3.5556** | | |
+| **Weissman (mean)** | | **4.9** | | |
+
+### Cross-Domain (adversarial — 10KB)
+
+See `docs/research/r23-cross-domain-validation.md`.
+
+| Test | BPB | Expected | Status |
+|---|---|---|---|
+| Random bytes | 8.0248 | 8.0 | PASS |
+| Repeated pattern | 0.0459 | ~0.0 | PASS |
 
 ### Historical (enwik8 progression)
 
@@ -326,6 +341,7 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
 - **Phase 3.2 — Domain Checkpoint**: BLOCKED (requires GPU).
 
 ### Next
-- **Silesia Corpus eval**: 12 diverse files, Weissman Score (R24)
+- **Silesia 100KB eval**: Scale to medium eval for robust Weissman Scores
+- **Binary domain improvement**: Byte-level tokenization or adaptive RWKV bypass
 - Full enwik8 evaluation with hierarchical+match configuration
 - Full SA-PPM with suffix array (upgrade from hash-based match model)

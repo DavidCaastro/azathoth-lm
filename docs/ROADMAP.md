@@ -199,7 +199,7 @@ Priority: high-complexity techniques for pushing toward <1.0 BPB.
 | P1.4 | Confidence skip | 2-5x speed | <3% speed gain | **KILLED** |
 | P2.1 | LSTM mixer | -0.05 to -0.22 | **-0.0375 BPB** | **DONE** |
 | P2.2 | Hierarchical groups | -0.02 to -0.05 | **-0.0277 BPB** | **DONE** |
-| P2.3 | Multi-corpus validation | honesty check | σ=0.964 (5 domains) | **DONE** |
+| P2.3 | Multi-corpus validation | honesty check | σ=1.72 (Silesia 12 files) | **DONE** |
 | P3.1 | Match model (simplified SA-PPM) | -0.10 to -0.30 | **-0.0095 BPB** | **DONE** |
 | P3.2 | Domain checkpoint | -0.10 to -0.20 | — | **BLOCKED** (GPU) |
 
@@ -275,7 +275,8 @@ P3.2 (domain checkpoint) is blocked by GPU hardware.
 | P2.1: LSTM mixer | **1.2549 BPB** (100KB), -0.0375 vs logistic, 134 B/s | 2026-10-06 |
 | P2.2: Hierarchical model groups | **1.2272 BPB** (100KB), -0.0277 vs flat LSTM, 138 B/s | 2026-10-06 |
 | P3.1: Match model (simplified SA-PPM) | **1.2177 BPB** (100KB), -0.0095 additional, 138 B/s | 2026-10-06 |
-| P2.3: Cross-domain validation | 5 domains tested, σ=0.964, adversarial PASS | 2026-10-06 |
+| P2.3: Cross-domain (initial) | 5 domains tested, σ=0.964, adversarial PASS | 2026-10-06 |
+| P2.3: Silesia Corpus eval | 12 files, mean 2.29 BPB, σ=1.72, Weissman=4.9 | 2026-10-06 |
 | P3.2: Domain checkpoint | BLOCKED — requires GPU (i5-1235U CPU only) | 2026-10-06 |
 
 ## Constraints
