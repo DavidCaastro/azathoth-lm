@@ -21,6 +21,34 @@ across domains, without cherry-picking.
 4. **Always compare against the industry standard**: zstd -19 is what people
    actually use. If we can't beat it meaningfully, the BPB number is academic.
 
+## Primary Metric: Composite BPB
+
+**BPB is not a scalar. It is a vector: (mean, sigma, worst).**
+
+A change is an improvement if and only if:
+1. `mean` decreases (or stays equal), AND
+2. `sigma` does not increase, AND
+3. `worst` does not increase by more than 0.05 BPB
+
+If `mean` decreases but `sigma` increases, the change is **biasing** the system
+toward specific domains — this is a regression, not an improvement.
+
+enwik8 BPB is reported for literature comparability but is NEVER the sole
+basis for accepting or rejecting a change.
+
+See `docs/research/r28-composite-metric-debias.md` for full justification.
+
+### Eval Suite Tiers
+
+| Tier | Files | Time | When | Decision role |
+|---|---|---|---|---|
+| **T1 Quick** | enwik8 10KB + dickens + samba + mozilla (10KB each) | ~5 min | Per milestone | Accept/reject gate |
+| **T2 Standard** | enwik8 100KB + all 12 Silesia (10KB each) | ~30 min | Per phase | Full composite |
+| **T3 Full** | enwik8 100MB + Silesia full + adversarial + baselines | ~8+ days | Per release | Publication |
+
+T1 covers three distinct data regimes (text, code, binary) with minimum time.
+T1 is the **mandatory** gate for every code change. No enwik8-only decisions.
+
 ## Eje 1 — Cross-Domain Compression (BPB by data type)
 
 Nine categories covering the spectrum of real-world data. No single category

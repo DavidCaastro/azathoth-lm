@@ -24,6 +24,7 @@ Cada experimento sigue este flujo antes de consumir compute:
 4. **Ejecucion**: correr con evaluacion progresiva (ver abajo)
 5. **Veredicto**: CONFIRMA / REFUTA / INCONCLUSO + por que
 6. **Registro**: actualizar INDEX.md, MEMORY.md, heritage.md si aplica
+7. **Composite gate**: medir Tier 1 (enwik8+dickens+samba+mozilla) para aceptar
 
 Sin prediccion previa no hay forma de distinguir un resultado bueno
 de uno mediocre. Sin kill criteria el riesgo es sunk cost fallacy.
@@ -51,12 +52,13 @@ Esto permite ~10 hipotesis/dia en fase Smoke vs ~1/dia en Full.
 Full protocol in `docs/BENCHMARKS.md`. Summary:
 
 Per milestone:
-  - enwik8 100KB quick eval (BPB, B/s) — regression test
-  - At least 2 non-text domains (rotation: binaries, code, scientific)
-  - All adversarial tests (random, repeated, domain-switch, pre-compressed)
+  - Tier 1 quick eval: enwik8 10KB + dickens + samba + mozilla (10KB each)
+  - Report composite BPB (mean, sigma, worst) — this is the decision gate
+  - enwik8-only numbers labeled "literature ref", never sole accept/reject
 
 Per phase:
-  - Full cross-domain table (11 categories, 9 data types)
+  - Tier 2 standard eval: enwik8 100KB + all 12 Silesia (10KB each)
+  - Full cross-domain table with composite BPB
   - Comparison vs gzip, zstd-19, brotli-11, PAQ8px, lzma2
   - Practical metrics: throughput, RAM, decompress speed
 
@@ -75,13 +77,35 @@ LM benchmarks (when GGUF export ready):
   - WikiText-103 ppl, ARC-C, HellaSwag, MMLU, Winogrande
   - Run on exported neural.gguf for direct comparability
 
-## Metricas dashboard
+## Metrica primaria: Composite BPB
+
+BPB NO es un escalar. Es un vector: **(mean, sigma, worst)**.
+
+Un cambio es mejora SI Y SOLO SI:
+1. mean baja (o igual), Y
+2. sigma no sube, Y
+3. worst no sube significativamente (+0.05 max)
+
+Si mean baja pero sigma sube → el cambio esta SESGANDO, no mejorando.
+Reportar enwik8 para comparabilidad con literatura, pero NUNCA como
+unico criterio de aceptacion/rechazo.
+
+Ver `docs/research/r28-composite-metric-debias.md` para justificacion.
+
+### Eval suite tiers
+
+| Tier | Archivos | Tiempo | Cuando |
+|---|---|---|---|
+| Quick (T1) | enwik8 10KB + dickens + samba + mozilla (10KB c/u) | ~5 min | Per milestone |
+| Standard (T2) | enwik8 100KB + 12 Silesia (10KB c/u) | ~30 min | Per phase |
+| Full (T3) | enwik8 100MB + Silesia full + adversarial | ~8+ dias | Per release |
+
+### Metricas dashboard
 
 | Metrica | Tipo | Optimizar? |
 |---|---|---|
-| BPB mean (cross-domain) | Primaria | SI — objetivo principal |
-| σ BPB (cross-domain) | Primaria | SI — lower = more universal |
-| BPB (enwik8) | Comparativa | SI — literature comparability |
+| **Composite BPB (mean, sigma, worst)** | **Primaria** | **SI — criterio de aceptacion** |
+| BPB (enwik8) | Comparativa | SI — literature comparability, NO decision gate |
 | BPB worst domain | Primaria | SI — no catastrophic failures |
 | Ratio vs zstd -19 | Practica | > 1.5x mean to justify existence |
 | B/s | Secundaria | Trackear, no priorizar sobre BPB |

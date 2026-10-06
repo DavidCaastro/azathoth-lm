@@ -1,8 +1,10 @@
 # Roadmap — azathoth-lm
 
 **Date**: 2026-10-06
-**Current best**: 1.1895 BPB (100KB enwik8), ~115 B/s (hierarchical + match + emb surgery)
-**Target**: < 1.0 BPB — universal compressor, measured on enwik8
+**Current best (enwik8)**: 1.1895 BPB (100KB enwik8, literature ref only)
+**Current composite**: mean=2.2901 | sigma=1.7223 | worst=6.1175 (pre-surgery, needs re-eval)
+**Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
+**Primary metric**: Composite BPB (mean, sigma, worst) — see R28
 
 ## Design Philosophy
 
@@ -200,6 +202,7 @@ Priority: high-complexity techniques for pushing toward <1.0 BPB.
 | P2.1 | LSTM mixer | -0.05 to -0.22 | **-0.0375 BPB** | **DONE** |
 | P2.2 | Hierarchical groups | -0.02 to -0.05 | **-0.0277 BPB** | **DONE** |
 | P2.3 | Multi-corpus validation | honesty check | σ=1.72 (Silesia 12 files) | **DONE** |
+| R28 | Composite BPB as primary metric | structural de-bias | (mean,σ,worst) replaces enwik8-only | **DONE** |
 | P3.1 | Match model (simplified SA-PPM) | -0.10 to -0.30 | **-0.0095 BPB** | **DONE** |
 | P3.2 | Domain checkpoint | -0.10 to -0.20 | — | **BLOCKED** (GPU) |
 
@@ -281,6 +284,7 @@ P3.2 (domain checkpoint) is blocked by GPU hardware.
 | P2.3: Silesia Corpus eval | 12 files, mean 2.29 BPB, σ=1.72, Weissman=4.9 | 2026-10-06 |
 | R27: Embedding surgery center0.3 | **1.1895 BPB** (100KB), -0.0282 additional, zero cost | 2026-10-06 |
 | P3.2: Domain checkpoint | BLOCKED — requires GPU (i5-1235U CPU only) | 2026-10-06 |
+| R28: Composite BPB metric | Primary metric = (mean, sigma, worst), not enwik8-only | 2026-10-06 |
 
 ## Constraints
 

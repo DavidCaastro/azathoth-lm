@@ -1,8 +1,28 @@
 # Results Index
 
-## Quick Reference
+## Primary Metric: Composite BPB (mean, sigma, worst)
 
-| Phase | BPB | Key Finding |
+BPB is a vector, not a scalar. See R28 for justification.
+
+### Current Composite Baseline (Silesia 12 files, 10KB, pre-surgery)
+
+```
+Composite BPB: mean=2.2901 | sigma=1.7223 | worst=6.1175 (sao)
+  Text-like mean:  1.0247 (6 files)
+  Binary mean:     3.5556 (6 files)
+```
+
+**Note**: Composite baseline needs re-measurement with embedding surgery (center0.3).
+The enwik8-only "1.1895 best" is a single-corpus number, not the composite.
+
+### Acceptance Rule
+
+A change is better if: mean DOWN + sigma SAME/DOWN + worst not UP by >0.05.
+enwik8-only numbers are "literature ref", never sole accept/reject gate.
+
+## Quick Reference (enwik8 — literature comparability only)
+
+| Phase | BPB (enwik8) | Key Finding |
 |---|---|---|
 | (inherited) analytic-lm | 1.5826 | 54 CM + LSTM, enwik8 80/20 |
 | (inherited) edge-lm | ~2.16 | WHT + multi-scale, own corpus |
@@ -25,7 +45,7 @@
 | R27 — Embedding surgery center0.3 (100KB) | **1.1895** | -0.0282 additional, zero runtime cost |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
-100KB "quick" eval. Full enwik8 feasible: 138 B/s → ~8.4 days.
+100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
 
 ## Target Landscape (enwik8)
 
@@ -58,7 +78,15 @@
 
 ## Benchmark Dashboard
 
-### Current Best (enwik8 — literature comparability)
+### Current Best — Composite (multi-corpus)
+
+| Metric | Value | Date | Note |
+|---|---|---|---|
+| **Composite mean** | **2.2901** | **2026-10-06** | Pre-surgery, needs re-eval |
+| **Composite sigma** | **1.7223** | **2026-10-06** | Pre-surgery, needs re-eval |
+| **Composite worst** | **6.1175 (sao)** | **2026-10-06** | Pre-surgery, needs re-eval |
+
+### Current Best — enwik8 (literature comparability only)
 
 | Metric | Value | Date |
 |---|---|---|
@@ -349,9 +377,10 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
   See `docs/research/r26-moe-architecture-research.md`.
 
 ### Next
+- **R28 Composite baseline**: Re-run Tier 1 eval with emb surgery to establish composite baseline
+- **Validate emb surgery on binary**: center0.3 untested on Silesia binary files
 - **Indirect context models (ICM)**: Target bits 3-5 bottleneck (est. -0.02 to -0.05)
 - **APM post-mixer correction**: Adaptive probability map after LSTM (est. -0.01)
 - **Match model upgrade**: Checksums, LRU eviction, confidence weighting
-- **RWKV bypass for binary**: Skip RWKV when bytes/token < 1.5
 - Full enwik8 evaluation with best config (~8 days)
 - Full SA-PPM with suffix array
