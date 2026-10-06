@@ -326,6 +326,6 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
 - **Phase 3.2 — Domain Checkpoint**: BLOCKED (requires GPU).
 
 ### Next
-- **P2.3**: Multi-corpus validation (enwik8 + Silesia/Calgary)
+- **Silesia Corpus eval**: 12 diverse files, Weissman Score (R24)
 - Full enwik8 evaluation with hierarchical+match configuration
 - Full SA-PPM with suffix array (upgrade from hash-based match model)
