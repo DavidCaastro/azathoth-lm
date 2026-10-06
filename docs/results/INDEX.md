@@ -340,8 +340,14 @@ Universal compressor design. Full details in `docs/ROADMAP.md`.
 - **Phase 3.1 — Match Model**: -0.0095 BPB additional. Best: **1.2177**.
 - **Phase 3.2 — Domain Checkpoint**: BLOCKED (requires GPU).
 
+### Research
+- **R26**: MoE architecture + direct weight manipulation research.
+  See `docs/research/r26-moe-architecture-research.md`.
+
 ### Next
+- **Dynamic MoE**: Regime-based expert routing (text/binary/structured)
+- **MambaByte integration**: 353M byte-level SSM as binary-domain expert
+- **Embedding surgery**: Direct weight manipulation for byte-token calibration
 - **Silesia 100KB eval**: Scale to medium eval for robust Weissman Scores
-- **Binary domain improvement**: Byte-level tokenization or adaptive RWKV bypass
 - Full enwik8 evaluation with hierarchical+match configuration
 - Full SA-PPM with suffix array (upgrade from hash-based match model)
