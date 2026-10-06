@@ -82,8 +82,8 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
 | ~~A1~~ | ~~APM/SSE 1-2 stages (distinct ctx)~~ | **KILLED (+0.10)** | ~~Low~~ | **R39.** +0.10 to +0.19 regression. LSTM well-calibrated, APM bins too sparse at 100KB. Only viable at full enwik8 (100MB). |
-| A2 | Match model multi-input | -0.005 to -0.015 | Low | Add more context lengths (3,5,10,12,20,48) + feed multiple match predictions as separate mixer inputs. Replaces SA-PPM at 5% effort. |
-| A3 | Tweedie denoising (Midicoth) | -0.01 to -0.03 | Med | Post-blend Tweedie empirical Bayes. Binary tree byte decomposition. Zero runtime cost. Paper March 2026. Do NOT combine with SSE (interference). |
+| ~~A2~~ | ~~Match model multi-input~~ | **KILLED (+0.001-0.013)** | ~~Low~~ | **R40.** Both multi-external and all-match variants regressed. Best-only match is optimal. Shorter matches add noise. |
+| ~~A3~~ | ~~Tweedie denoising (Midicoth)~~ | **Demoted to C** | ~~Med~~ | Only validated on PPM pipelines (not after LSTM). APM/SSE validated in cmix. Interference risk. |
 
 ### Tier B — Medium impact
 

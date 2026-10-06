@@ -590,6 +590,7 @@ impl BitMixer {
 
 const APM_BINS: usize = 33; // quantization bins for input probability
 
+#[allow(dead_code)]
 struct Apm {
     /// Stretched probability table: [n_contexts][APM_BINS]
     table: Vec<f32>,
@@ -601,6 +602,7 @@ struct Apm {
     cached_weight: f32,
 }
 
+#[allow(dead_code)]
 impl Apm {
     fn new(n_contexts: usize, lr: f32) -> Self {
         // Initialize table so that APM is initially identity: output ≈ input
