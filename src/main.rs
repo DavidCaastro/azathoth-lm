@@ -42,7 +42,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--match] [--log FILE.jsonl] [--emb-surgery METHOD]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--match] [--log FILE.jsonl] [--emb-surgery METHOD]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -392,6 +392,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut use_match = false;
     let mut lstm_hidden: usize = 128;
     let mut lstm_lr: f32 = 0.002;
+    let mut lstm_layers: usize = 1;
     let mut log_path: Option<String> = None;
     let mut emb_surgery: Option<String> = None;
 
@@ -407,6 +408,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--match" => { use_match = true; }
             "--lstm-hidden" => { i += 1; lstm_hidden = args[i].parse().unwrap(); use_lstm = true; }
             "--lstm-lr" => { i += 1; lstm_lr = args[i].parse().unwrap(); use_lstm = true; }
+            "--lstm-layers" => { i += 1; lstm_layers = args[i].parse().unwrap(); }
             "--log" => { i += 1; log_path = Some(args[i].clone()); }
             "--emb-surgery" => { i += 1; emb_surgery = Some(args[i].clone()); }
             _ => {}
@@ -447,8 +449,8 @@ fn cmd_hybrid_eval(args: &[String]) {
 
     // Initialize components
     let mut cm = if use_hierarchical {
-        eprintln!("[hybrid] hierarchical mixer: hidden={}, lr={}", lstm_hidden, lstm_lr);
-        ContextMixer::new_with_hierarchical(lstm_hidden, lstm_lr)
+        eprintln!("[hybrid] hierarchical mixer: hidden={}, lr={}, layers={}", lstm_hidden, lstm_lr, lstm_layers);
+        ContextMixer::new_with_hierarchical(lstm_hidden, lstm_lr, lstm_layers)
     } else if use_lstm {
         eprintln!("[hybrid] LSTM mixer: hidden={}, lr={}", lstm_hidden, lstm_lr);
         ContextMixer::new_with_lstm(lstm_hidden, lstm_lr)
@@ -459,7 +461,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let cm_mem_mb = cm.memory_bytes() as f64 / (1024.0 * 1024.0);
     let mixer_params = cm.mixer_param_count();
     let mixer_str = if use_hierarchical {
-        format!("hierarchical(H={},lr={}, {}params)", lstm_hidden, lstm_lr, mixer_params)
+        format!("hierarchical(H={},lr={},L={}, {}params)", lstm_hidden, lstm_lr, lstm_layers, mixer_params)
     } else if use_lstm {
         format!("LSTM(H={},lr={}, {}params)", lstm_hidden, lstm_lr, mixer_params)
     } else {

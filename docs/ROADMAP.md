@@ -89,11 +89,11 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 
 | # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| B1 | LSTM: 2 layers × 128 | -0.01 to -0.03 | Med | After BPTT>1 works. cmix uses 2×200. |
-| B2 | BPTT scaling to 16-32 | -0.01 to -0.03 | Med | Incremental after BPTT=8 is stable. |
-| B3 | ISSE chains (3-5 stages) | -0.01 to -0.025 | Med | Gleipnir's core innovation. More expressive than APM, cheaper than LSTM. |
-| B4 | Higher-order CM (orders 12, 16) | -0.005 to -0.01 | Low | Gleipnir uses up to order 16. Small tables (1.5 MB each). |
-| B5 | WRT preprocessing (256→~205 symbols) | -0.01 to -0.03 | Med | fx2-cmix (Hutter Prize winner) uses it. Word Reducing Transform. |
+| ~~B1~~ | ~~LSTM: 2 layers × 128~~ | **KILLED (+0.0003 at 100KB)** | ~~Med~~ | **R43.** 2×64 gives -0.0216 at 10KB but neutral at 100KB. Only 2 inputs to top LSTM → insufficient information for 2nd layer. Infra retained (--lstm-layers N). |
+| ~~B2~~ | ~~BPTT scaling to 16-32~~ | **KILLED (+0.0000 at 100KB)** | ~~Med~~ | **R41.** BPTT=16 exactly neutral, BPTT=32 slight regression. BPTT=8 (1 byte) is optimal for bit-level LSTM. Cross-byte bit patterns are noise. |
+| ~~B3~~ | ~~ISSE chains (3-5 stages)~~ | **KILLED (by analogy with A1)** | ~~Med~~ | Same family as APM/SSE (A1). Post-mixer correction overcorrects at 100KB scale. LSTM already well-calibrated. |
+| ~~B4~~ | ~~Higher-order CM (orders 12, 16)~~ | **KILLED (+0.0004 at 100KB)** | ~~Low~~ | **R42.** Redundant with RWKV long-context. Confirms R33: CM count not bottleneck in hybrid. |
+| ~~B5~~ | ~~WRT preprocessing (256→~205 symbols)~~ | **Deferred** | ~~Med~~ | Redundant with RWKV 65K tokenizer (like WordModel S4). Only viable for CM-only mode. |
 
 ### Tier C — Lower priority / speculative
 
@@ -143,30 +143,39 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | S2 | LSTM: LayerNorm per-gate | -0.0057 (100KB), -0.0510 (10KB early boost) | **DONE** |
 | S3 | LSTM: BPTT=8 + Adam(beta1≈0) | -0.0055 (100KB), -0.0017 (10KB). 148 B/s. | **DONE** |
 | S4 | WordModel (case-folded unigram + bigram) | +0.0009 (neutral). Redundant with RWKV. | **DONE** |
+| A1 | APM/SSE post-LSTM | +0.10 to +0.19 regression | **KILLED** |
+| A2 | Match multi-input | +0.001 to +0.013 regression | **KILLED** |
+| B1 | 2-layer LSTM (2×128, 2×64) | +0.0003 at 100KB (neutral). -0.0216 at 10KB. | **KILLED** |
+| B2 | BPTT scaling (16, 32) | +0.0000 at 100KB (neutral). Bit-level ceiling. | **KILLED** |
+| B3 | ISSE chains | Killed by analogy with A1 | **KILLED** |
+| B4 | Higher-order CM (12, 16) | +0.0004 at 100KB (neutral). Redundant with RWKV. | **KILLED** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
-## Remaining Trajectory (enwik8, from 1.1895)
+## Remaining Trajectory (enwik8, from 1.1852)
 
-Optimistic (research-backed estimates, updated post-S3):
+Post Tier S + A + B analysis. Every incremental approach has been tested
+and found neutral at 100KB. The architecture is at a local minimum.
+
+Optimistic:
 ```
-1.1843  current (S1+S2+S3 complete: -0.0079 cumulative)
-1.17    + WordModel + APM/SSE (-0.015)
-1.14    + match improvements + higher orders (-0.03)
-1.10    + BPTT=32 + 2 layers + WRT (-0.04)
-1.05    ceiling without GPU (optimistic)
+1.1852  current (post Tier S+A+B: only S2+S3 provided real gains)
+1.17    + full enwik8 convergence (100MB, est. 8-13 days)
+1.15    + online LSTM expert C1 (-0.01 to -0.03)
+1.13    ceiling without GPU (optimistic)
 ```
 
 Conservative:
 ```
-1.1843  current
-1.17    + WordModel + APM (-0.015)
-1.15    + full enwik8 convergence (-0.02)
-1.13    ceiling without GPU (conservative)
+1.1852  current
+1.17    + full enwik8 convergence (-0.015)
+1.16    ceiling without GPU (conservative)
 ```
 
 Sub-1.0 requires domain-tuned neural model (GPU) or breakthrough in
-online adaptation. See R34 for research justifying revised estimates.
+online adaptation. All Tier A/B incremental improvements tested and
+found neutral. Next gains likely require fundamentally different
+approaches (C-tier) or scaling to full enwik8.
 
 ## Constraints
 

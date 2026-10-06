@@ -54,6 +54,10 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | R38 — S4 WordModel (100KB) | 1.1852 | +0.0009 (neutral). Redundant with RWKV. +12 MB. Kept for diversity. |
 | R39 — A1 APM/SSE (10KB) | KILLED | +0.10 to +0.19 regression. LSTM well-calibrated, APM too sparse. |
 | R40 — A2 Match multi-input | KILLED | Multi-ext +0.013, all-match +0.001. Best-only match optimal. |
+| R41 — B2 BPTT scaling (16, 32) | KILLED | BPTT=16: +0.0000 (100KB). BPTT=32: +0.0020 (10KB). Bit-level ceiling at 8. |
+| R42 — B4 Higher-order CM (12, 16) | KILLED | +0.0004 (100KB). Redundant with RWKV. +2.2 MB. Confirms R33. |
+| R43 — B1 2-layer LSTM | KILLED | 2×128: +0.0014 (100KB). 2×64: +0.0003 (100KB). Early boost only (-0.0216 at 10KB). |
+| B3 — ISSE chains | KILLED | By analogy with A1 (APM/SSE). Same family, same scale problems. |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).

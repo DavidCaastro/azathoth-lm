@@ -790,7 +790,7 @@ impl ContextMixer {
 
     /// Create with hierarchical grouping + LSTM top mixer.
     /// Groups: [orders 0-2] [orders 3-8 + sparse + indirect + word] + auto-extended [externals].
-    pub fn new_with_hierarchical(hidden_dim: usize, lr: f32) -> Self {
+    pub fn new_with_hierarchical(hidden_dim: usize, lr: f32, n_layers: usize) -> Self {
         let models = Self::build_models();
         let max_history = 32;
         // Group 0: CM orders 0-2 (short context patterns) — 3 models
@@ -802,7 +802,7 @@ impl ContextMixer {
             BitMixer::new(3, 0.05),       // Group 0: orders 0-2
             BitMixer::new(n_cm - 3, 0.05), // Group 1: orders 3-8 + sparse + indirect + word
         ];
-        let top_lstm = LstmBitMixer::new(n_groups, hidden_dim, lr);
+        let top_lstm = LstmBitMixer::new_with_layers(n_groups, hidden_dim, lr, n_layers);
         // APM post-LSTM correction stages (A1)
         // Stage 0: bit position context (8 entries × 33 bins = 1.1 KB)
         // Stage 1: last byte context (256 entries × 33 bins = 33.8 KB)
