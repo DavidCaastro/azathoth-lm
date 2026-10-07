@@ -152,18 +152,13 @@ Each log entry (per ~100 bytes) contains:
 - `match_hits`: cumulative match model hit count
 - `match_avg_len`: average match length
 
-### PENDING: real-time flush
+### DONE: real-time flush
 
-JSONL telemetry is currently buffered and flushed only when the file is closed
-(i.e., after the eval completes). This means the log file shows 0 lines during
-execution and all entries appear at once at the end.
-
-**Fix**: add `file.flush()` after each `writeln!` to the JSONL file in
-`src/main.rs`. Overhead is negligible (~1 syscall per ~1000 bytes, <0.001%).
-This enables live monitoring of eval progress via `tail -f` or `wc -l`.
-
-**Do not apply during R50 eval run** — the binary is already running.
-Apply after R50 results are collected.
+JSONL telemetry was buffered and flushed only on file close.
+Fixed in commit ee92afd: added `file.flush()` after each `writeln!` in
+`src/application/telemetry.rs`. Now entries appear in real-time.
+Overhead: negligible (~1 syscall per ~1000 bytes, <0.001%).
+Active in Run 2 (run-eval-all-v2.sh).
 
 ### IMPLEMENTED: --save-state v2 (cm_state.bin + metadata)
 
