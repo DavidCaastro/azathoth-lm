@@ -98,7 +98,8 @@ Ver `docs/research/r28-composite-metric-debias.md` para justificacion.
 |---|---|---|---|
 | Quick (T1) | enwik8 + dickens + samba + mozilla + OEIS (10KB c/u) | ~8 min | Per milestone |
 | Standard (T2) | enwik8 100KB + 12 Silesia (10KB c/u) | ~30 min | Per phase |
-| Full (T3) | enwik8 100MB + Silesia full + adversarial | ~8+ dias | Per release |
+| Modern (T3) | AIT DCC 2026 (A-H) + local modern (10KB c/u) | ~30 min | Per phase |
+| Full (T4) | enwik8 100MB + Silesia full + adversarial | ~8+ dias | Per release |
 
 ### Metricas dashboard
 

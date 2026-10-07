@@ -44,7 +44,8 @@ See `docs/research/r28-composite-metric-debias.md` for full justification.
 |---|---|---|---|---|
 | **T1 Quick** | enwik8 + dickens + samba + mozilla + OEIS (10KB each) | ~8 min | Per milestone | Accept/reject gate |
 | **T2 Standard** | enwik8 100KB + all 12 Silesia (10KB each) | ~30 min | Per phase | Full composite |
-| **T3 Full** | enwik8 100MB + Silesia full + adversarial + baselines | ~8+ days | Per release | Publication |
+| **T3 Modern** | AIT DCC 2026 (A-H) + local modern (10KB each) | ~30 min | Per phase | Modern morphology validation |
+| **T4 Full** | enwik8 100MB + Silesia full + adversarial + baselines | ~8+ days | Per release | Publication |
 
 T1 covers four distinct data regimes (text, code, binary, numerical) with minimum time.
 T1 is the **mandatory** gate for every code change. No enwik8-only decisions.
@@ -192,3 +193,68 @@ cross-domain evaluation (Phase 1 completion).
    summary, not buried in an appendix.
 4. **σ and range are first-class metrics**: they appear next to mean BPB in
    every report. If σ increases, it's a regression even if mean improves.
+
+## Tier 3 — Modern Morphology Validation
+
+**Added**: 2026-10-07 (R48 investigation)
+**Purpose**: Validate compression on data morphologies absent from Silesia (2003).
+**Does NOT replace T1/T2**: complements them with modern data types.
+
+### Motivation
+
+Silesia lacks: JSON/structured logs, ML model weights, modern executables
+(x86-64 PIE, ARM64), scientific floating-point, pseudo-random, protein sequences.
+The AIT DCC 2026 benchmark (117 compressors, hidden test, peer-reviewed) provides
+the best modern multi-domain reference. See R48 for full investigation.
+
+### T3 Files
+
+#### AIT DCC 2026 Training Set (A-H, publicly available)
+
+| File | Type | Size | Source | Why |
+|---|---|---|---|---|
+| ait-A | Protein sequences (Enterococcus phage) | 1.3 MB | aitdcc.github.io | Bioinformatics — 4-letter alphabet (ACGT+), absent from Silesia |
+| ait-B | C source code (zstd-derived) | 1.2 MB | aitdcc.github.io | Modern source code — compare vs Silesia samba (2003) |
+| ait-C | English Wikipedia text | 2.0 MB | aitdcc.github.io | Text — compare vs enwik8 |
+| ait-D | Pseudo-random sequence | 2.0 MB | aitdcc.github.io | Near-incompressible — adversarial test, compare vs random |
+| ait-E | CERN ATLAS floating-point data | 1.0 MB | aitdcc.github.io | Scientific float — absent from Silesia entirely |
+| ait-F | Raw astronomical image | 2.1 MB | aitdcc.github.io | Scientific imaging — compare vs Silesia x-ray/mr |
+| ait-G | Raw astronomical image (different) | 2.5 MB | aitdcc.github.io | Second imaging sample for variance |
+| ait-H | Executable binary (zstd) | 1.0 MB | aitdcc.github.io | Modern compiled binary — compare vs Silesia mozilla |
+
+#### Local Modern Data
+
+| File | Type | Size | Source | Why |
+|---|---|---|---|---|
+| modern-x64-pe | x86-64 PE executable (Rust, LTO, stripped) | 543 KB | Our own azathoth-lm.exe | Modern PE32+ — Silesia mozilla is x86-32 ELF from 2003 |
+| ml-weights-safetensors | ML model weights (SafeTensors) | 10 KB* | RWKV-7 0.1B weights | ML weights format — absent from all compression benchmarks |
+| structured-jsonl | Structured JSON-lines telemetry | 10 KB* | Our telemetry logs | JSON-lines — the most common "please compress this" format |
+
+*10KB samples for smoke-test consistency with T1/T2.
+
+### Eval Protocol
+
+- **Per file**: 10KB eval (first 10,000 bytes), same as T1/T2
+- **Mode**: hybrid-eval (full stack: CM + RWKV + match + LSTM mixer + emb surgery)
+- **Metrics**: BPB, B/s, composite (mean, sigma, worst)
+- **Comparison**: T3 composite vs T1/T2 composite — are we better/worse on modern data?
+
+### Anti-Gaming
+
+Same rules as T1/T2:
+- No domain detection — adaptation must be data-driven and online
+- No corpus-specific hyperparameters — fixed across all domains
+- σ and range are first-class metrics
+
+### Data Integrity
+
+AIT DCC files verified by SHA-256 checksums from aitdcc.github.io/data/SHA256SUMS.
+Local files are deterministic (binary build, first-N-bytes extraction).
+
+### Interpretation Guide
+
+T3 results answer: "Does our compressor generalize to data types it has never seen?"
+- If T3 mean ≈ T2 mean: good generalization
+- If T3 mean >> T2 mean: architecture is biased toward Silesia-era data
+- If T3 sigma < T2 sigma: better consistency on modern data
+- If specific AIT files catastrophically fail: reveals missing model capabilities
