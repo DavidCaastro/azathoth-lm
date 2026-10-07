@@ -271,6 +271,31 @@ Key questions to answer:
 4. Do modern data types reveal new blind spots? (architecture gaps)
 5. Which AIT DCC files are hardest? (correlation with AIT competition rankings)
 
+## Checkpoint State
+
+This eval run is **measurement only** — no learned state is persisted.
+
+| Component | State type | Persisted? | Notes |
+|---|---|---|---|
+| RWKV-7 0.1B Q8 | Pre-trained weights | Yes (read-only) | `weights/rwkv7-0.1b/` |
+| CM hash tables (14 models) | Online-learned | **No** | Rebuilt from scratch each eval |
+| LSTM mixer (51K params) | Online-learned | **No** | Rebuilt from scratch each eval |
+| MatchModel | Online-learned | **No** | Rebuilt from scratch each eval |
+
+### PENDING: cm_state.bin export
+
+The architecture spec (`architecture.md`) defines a two-layer checkpoint:
+- `neural.gguf` — RWKV weights (already available as SafeTensors, GGUF export pending)
+- `cm_state.bin` — CM + LSTM + match state (format defined, export NOT implemented)
+
+Saving `cm_state.bin` after eval would enable:
+1. Resume compression from a checkpoint (no re-learning on seen data)
+2. Deploy pre-adapted state for known domains
+3. Measure state size vs BPB contribution
+
+This is a feature request, not a bug. The online learning is deterministic given
+the same input, so results are reproducible without checkpoints — just slower.
+
 ## Hardware
 
 - CPU: Intel i5-1235U (Alder Lake), 12 threads
