@@ -12,6 +12,7 @@ use crate::domain::coder::{Cdf, RangeEncoder, RangeDecoder};
 use crate::domain::cm::ContextMixer;
 use crate::domain::bridge::{ByteBridge, byte_probs_to_bit_preds};
 use crate::domain::match_model::MatchModel;
+use crate::domain::lstm_expert::LstmExpert;
 use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot, HybridLogger, HybridLogSnapshot};
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
@@ -42,7 +43,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--match] [--log FILE.jsonl] [--emb-surgery METHOD]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--match] [--expert] [--expert-lr F] [--log FILE.jsonl] [--emb-surgery METHOD]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -390,6 +391,8 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut use_lstm = false;
     let mut use_hierarchical = false;
     let mut use_match = false;
+    let mut use_expert = false;
+    let mut expert_lr: f32 = 0.01;
     let mut lstm_hidden: usize = 128;
     let mut lstm_lr: f32 = 0.002;
     let mut lstm_layers: usize = 1;
@@ -406,6 +409,8 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--lstm" => { use_lstm = true; }
             "--hierarchical" => { use_hierarchical = true; }
             "--match" => { use_match = true; }
+            "--expert" => { use_expert = true; }
+            "--expert-lr" => { i += 1; expert_lr = args[i].parse().unwrap(); use_expert = true; }
             "--lstm-hidden" => { i += 1; lstm_hidden = args[i].parse().unwrap(); use_lstm = true; }
             "--lstm-lr" => { i += 1; lstm_lr = args[i].parse().unwrap(); use_lstm = true; }
             "--lstm-layers" => { i += 1; lstm_layers = args[i].parse().unwrap(); }
@@ -469,10 +474,15 @@ fn cmd_hybrid_eval(args: &[String]) {
     };
     let mut match_model = if use_match { Some(MatchModel::new()) } else { None };
     let match_mem_mb = match_model.as_ref().map(|m| m.memory_bytes() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-    eprintln!("[hybrid] CM: {} models, {:.1} MB | mixer: {} | trie: {} nodes{}",
+    let mut expert = if use_expert { Some(LstmExpert::new(expert_lr)) } else { None };
+    let expert_str = if let Some(ref e) = expert {
+        format!(" | expert: {}params, lr={}", e.param_count(), expert_lr)
+    } else { String::new() };
+    eprintln!("[hybrid] CM: {} models, {:.1} MB | mixer: {} | trie: {} nodes{}{}",
               cm.n_models(),
               cm_mem_mb, mixer_str, bridge.node_count(),
-              if use_match { format!(" | match: {:.1} MB", match_mem_mb) } else { String::new() });
+              if use_match { format!(" | match: {:.1} MB", match_mem_mb) } else { String::new() },
+              expert_str);
 
     let mut logger = log_path.as_ref().map(|p| HybridLogger::new(p, total_bytes));
 
@@ -558,25 +568,42 @@ fn cmd_hybrid_eval(args: &[String]) {
                     let byte_probs = bridge.byte_probs();
                     let rwkv_bit_preds = byte_probs_to_bit_preds(&byte_probs, byte);
                     let mut bit_costs = [0.0f64; 8];
-                    let (bits, match_len) = if let Some(ref mm) = match_model {
+
+                    // Build externals list dynamically
+                    let mut externals: Vec<[f32; 8]> = Vec::new();
+                    externals.push(rwkv_bit_preds);
+
+                    let match_len = if let Some(ref mm) = match_model {
                         let (match_byte_probs, ml) = mm.predict();
-                        let match_bit_preds = byte_probs_to_bit_preds(&match_byte_probs, byte);
-                        let b = if logger.is_some() {
-                            cm.process_byte_with_externals_detailed(byte, &[&rwkv_bit_preds, &match_bit_preds], &mut bit_costs)
+                        externals.push(byte_probs_to_bit_preds(&match_byte_probs, byte));
+                        ml
+                    } else { 0 };
+
+                    if let Some(ref expert_ref) = expert {
+                        let expert_byte_probs = expert_ref.predict_byte();
+                        externals.push(byte_probs_to_bit_preds(expert_byte_probs, byte));
+                    }
+
+                    let ext_refs: Vec<&[f32; 8]> = externals.iter().collect();
+                    let bits = if ext_refs.len() > 1 {
+                        if logger.is_some() {
+                            cm.process_byte_with_externals_detailed(byte, &ext_refs, &mut bit_costs)
                         } else {
-                            cm.process_byte_with_externals(byte, &[&rwkv_bit_preds, &match_bit_preds])
-                        };
-                        (b, ml)
+                            cm.process_byte_with_externals(byte, &ext_refs)
+                        }
                     } else {
-                        let b = cm.process_byte_with_external(byte, &rwkv_bit_preds);
-                        (b, 0)
+                        cm.process_byte_with_external(byte, &rwkv_bit_preds)
                     };
+
                     total_bits += bits;
                     if let Some(ref mut log) = logger {
                         log.record_byte(bits, &HybridLogSnapshot { bit_costs, match_len });
                     }
                     if let Some(ref mut mm) = match_model {
                         mm.observe(byte);
+                    }
+                    if let Some(ref mut exp) = expert {
+                        exp.observe_byte(byte);
                     }
                     bridge.advance_byte(byte);
                     byte_count += 1;
@@ -596,13 +623,24 @@ fn cmd_hybrid_eval(args: &[String]) {
             // First token: CM only (no RWKV context yet)
             for &byte in tok_bytes {
                 let bit_costs = [0.0f64; 8];
-                let (bits, match_len) = if let Some(ref mm) = match_model {
+                let mut externals: Vec<[f32; 8]> = Vec::new();
+
+                let match_len = if let Some(ref mm) = match_model {
                     let (match_byte_probs, ml) = mm.predict();
-                    let match_bit_preds = byte_probs_to_bit_preds(&match_byte_probs, byte);
-                    let b = cm.process_byte_with_external(byte, &match_bit_preds);
-                    (b, ml)
+                    externals.push(byte_probs_to_bit_preds(&match_byte_probs, byte));
+                    ml
+                } else { 0 };
+
+                if let Some(ref expert_ref) = expert {
+                    let expert_byte_probs = expert_ref.predict_byte();
+                    externals.push(byte_probs_to_bit_preds(expert_byte_probs, byte));
+                }
+
+                let ext_refs: Vec<&[f32; 8]> = externals.iter().collect();
+                let bits = if !ext_refs.is_empty() {
+                    cm.process_byte_with_externals(byte, &ext_refs)
                 } else {
-                    (cm.process_byte(byte), 0)
+                    cm.process_byte(byte)
                 };
                 total_bits += bits;
                 if let Some(ref mut log) = logger {
@@ -610,6 +648,9 @@ fn cmd_hybrid_eval(args: &[String]) {
                 }
                 if let Some(ref mut mm) = match_model {
                     mm.observe(byte);
+                }
+                if let Some(ref mut exp) = expert {
+                    exp.observe_byte(byte);
                 }
                 byte_count += 1;
             }

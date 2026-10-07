@@ -13,8 +13,8 @@ Composite BPB: mean=2.2799 | sigma=1.6843 | worst=6.0483 (sao)
 ```
 
 Post-Tier S+A+B config: 14 CM models (incl. 2 word), BPTT=8 LSTM, APM disabled.
-Tier B tested and killed: BPTT 16-32, orders 12/16, 2-layer LSTM, ISSE — all neutral.
-Architecture at local minimum at 100KB scale. Only S2+S3 provided real gains.
+All Tiers S/A/B/C exhausted. 17 experiments, only S2+S3 improved BPB.
+Architecture at hard local minimum at 100KB scale. Next: full enwik8 or GPU.
 
 ### Acceptance Rule
 
@@ -58,6 +58,9 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | R42 — B4 Higher-order CM (12, 16) | KILLED | +0.0004 (100KB). Redundant with RWKV. +2.2 MB. Confirms R33. |
 | R43 — B1 2-layer LSTM | KILLED | 2×128: +0.0014 (100KB). 2×64: +0.0003 (100KB). Early boost only (-0.0216 at 10KB). |
 | B3 — ISSE chains | KILLED | By analogy with A1 (APM/SSE). Same family, same scale problems. |
+| R44 — C1 Online LSTM expert | KILLED | +0.0127 (100KB). New mixer group overhead > prediction value. 44K params, -27% speed. |
+| C2 — Information inheritance | KILLED | By analysis. Redundant with hierarchical mixer. |
+| C3 — Modality-routing | KILLED | By analysis. Violates no-domain-detection. Same group overhead pattern. |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).

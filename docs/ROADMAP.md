@@ -100,9 +100,9 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 
 | # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| C1 | Online LSTM expert (RATA-CMIX style) | -0.01 to -0.03 | High | 2×200 LSTM as predictor (not mixer). Generates own probabilities alongside RWKV. |
-| C2 | Information inheritance between CM orders | -0.005 to -0.01 | Med | Lower-order estimates feed higher-order models (Chained Neural Predictors, April 2026). |
-| C3 | Modality-routing (OmniZip-inspired) | -0.05 to -0.15 | High | Learned routing for binary data. Our binary BPB (3.52 mean) is 3x worse than text. |
+| ~~C1~~ | ~~Online LSTM expert (RATA-CMIX style)~~ | **KILLED (+0.0127)** | ~~High~~ | **R44.** Expert as external creates new mixer group. Group overhead > prediction value at 100KB. Code retained (--expert). |
+| ~~C2~~ | ~~Information inheritance between CM orders~~ | **KILLED (by analysis)** | ~~Med~~ | Redundant with hierarchical mixer (already combines all orders). Same pattern as R33/B4: CM enhancement neutral with RWKV. |
+| ~~C3~~ | ~~Modality-routing (OmniZip-inspired)~~ | **KILLED (by analysis)** | ~~High~~ | Violates no-domain-detection principle. Adding routing creates new mixer complexity → same regression pattern as C1/A2. |
 
 ### Blocked
 
@@ -150,33 +150,39 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | B2 | BPTT scaling (16, 32) | +0.0000 at 100KB (neutral). Bit-level ceiling. | **KILLED** |
 | B3 | ISSE chains | Killed by analogy with A1 | **KILLED** |
 | B4 | Higher-order CM (12, 16) | +0.0004 at 100KB (neutral). Redundant with RWKV. | **KILLED** |
+| C1 | Online LSTM expert | +0.0127 at 100KB. New group overhead > prediction value. | **KILLED** |
+| C2 | Information inheritance | Redundant with mixer. Killed by analysis. | **KILLED** |
+| C3 | Modality-routing | Violates no-domain-detection. Killed by analysis. | **KILLED** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
 ## Remaining Trajectory (enwik8, from 1.1852)
 
-Post Tier S + A + B analysis. Every incremental approach has been tested
-and found neutral at 100KB. The architecture is at a local minimum.
+Post Tier S + A + B + C. **All roadmap items exhausted at 100KB.**
 
-Optimistic:
-```
-1.1852  current (post Tier S+A+B: only S2+S3 provided real gains)
-1.17    + full enwik8 convergence (100MB, est. 8-13 days)
-1.15    + online LSTM expert C1 (-0.01 to -0.03)
-1.13    ceiling without GPU (optimistic)
-```
+### Fundamental finding: 100KB ceiling
 
-Conservative:
+Every approach tested — 17 experiments across 4 tiers — converges to
+the same result: the architecture is at a **hard local minimum** at
+100KB scale. The root cause is the hierarchical mixer:
+
+- Adding new externals creates new groups → parameter overhead > information gain
+- Adding model complexity (BPTT, layers, orders) → neutral due to limited data
+- Post-mixer correction (APM/SSE/ISSE) → overcorrects with sparse bins
+
+The ONLY gains that worked (S2 LayerNorm -0.0057, S3 BPTT=8 -0.0055) improved
+existing components rather than adding new ones.
+
+### Path forward
+
 ```
-1.1852  current
-1.17    + full enwik8 convergence (-0.015)
+1.1852  current (post Tier S+A+B+C)
+1.17    + full enwik8 100MB convergence (est. -0.015, requires 8-13 days)
 1.16    ceiling without GPU (conservative)
 ```
 
-Sub-1.0 requires domain-tuned neural model (GPU) or breakthrough in
-online adaptation. All Tier A/B incremental improvements tested and
-found neutral. Next gains likely require fundamentally different
-approaches (C-tier) or scaling to full enwik8.
+Sub-1.0 requires domain-tuned neural model (GPU). All CPU-accessible
+improvements have been exhausted at evaluation scale.
 
 ## Constraints
 
