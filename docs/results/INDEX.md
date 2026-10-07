@@ -4,17 +4,20 @@
 
 BPB is a vector, not a scalar. See R28 for justification.
 
-### Current Composite Baseline (Silesia T2: 12 files, 10KB, post-Tier A + surgery)
+### Current Composite Baseline (Silesia T2: 12 files, 10KB, FINAL post-all-tiers)
 
 ```
 Composite BPB: mean=2.2799 | sigma=1.6843 | worst=6.0483 (sao)
   Text-like mean:  1.1321 (6 files)
   Binary mean:     3.4278 (6 files)
+  Throughput:      29-133 B/s (mean ~62 B/s)
 ```
 
-Post-Tier S+A+B config: 14 CM models (incl. 2 word), BPTT=8 LSTM, APM disabled.
-All Tiers S/A/B/C exhausted. 17 experiments, only S2+S3 improved BPB.
+FINAL config: 14 CM + RWKV-7 0.1B Q8 + match + LSTM mixer (H=128, BPTT=8,
+coupled gates, LN, Adam) + emb surgery center0.3. All Tiers S/A/B/C exhausted.
+17 experiments, only S2 (LayerNorm -0.0057) and S3 (BPTT=8 -0.0055) improved BPB.
 Architecture at hard local minimum at 100KB scale. Next: full enwik8 or GPU.
+Telemetry logs: `docs/results/t2-final/*.jsonl` (per-byte BPB, bit costs, match stats).
 
 ### Acceptance Rule
 
@@ -61,6 +64,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | R44 — C1 Online LSTM expert | KILLED | +0.0127 (100KB). New mixer group overhead > prediction value. 44K params, -27% speed. |
 | C2 — Information inheritance | KILLED | By analysis. Redundant with hierarchical mixer. |
 | C3 — Modality-routing | KILLED | By analysis. Violates no-domain-detection. Same group overhead pattern. |
+| **R45 — T2 Final Silesia (12 files)** | **2.2799 mean** | **Identical to post-A. Tiers B+C = zero impact. Telemetry in t2-final/*.jsonl** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
@@ -118,9 +122,12 @@ Note: T1 not yet re-evaluated with S3. Values below are pre-S1 with surgery.
 | mozilla (10KB) | Binary | **1.7227** | 1.7673 | -0.0446 |
 | OEIS (10KB) | Numerical | **1.9045** | 1.9596 | -0.0551 |
 
-### Full Silesia Composite (Tier 2: 12 files, 10KB, post-Tier A + surgery)
+### Full Silesia Composite (Tier 2: 12 files, 10KB, FINAL 2026-10-07)
 
-| Metric | Post-Tier A | Pre-S1 | Delta | Verdict |
+Re-evaluated 2026-10-07 with final architecture (post all tiers S/A/B/C).
+Values identical to post-Tier A — confirms Tiers B and C had zero BPB impact.
+
+| Metric | FINAL | Pre-S1 | Delta | Verdict |
 |---|---|---|---|---|
 | **mean** | **2.2799** | 2.3456 | **-0.0657** | DOWN |
 | **sigma** | **1.6843** | 1.6269 | +0.0574 | UP (WordModel dilution) |
@@ -142,29 +149,31 @@ Note: T1 not yet re-evaluated with S3. Values below are pre-S1 with surgery.
 | MB RAM (Q8 + CM + match) | **~240** | **2026-10-06** |
 | BPB/Mparam | 0.0122 | 2026-10-06 |
 
-### Cross-Domain (Silesia Corpus — 10KB samples, with surgery)
+### Cross-Domain (Silesia Corpus — 10KB samples, FINAL 2026-10-07)
 
-Full analysis in `docs/research/r25-silesia-evaluation.md` (pre-surgery)
-and `docs/research/r30-frontier-research-roadmap-reform.md` (with surgery).
+Full analysis in `docs/research/r25-silesia-evaluation.md` (pre-surgery),
+`docs/research/r30-frontier-research-roadmap-reform.md` (with surgery),
+and `docs/research/r45-t2-final-silesia-eval.md` (final post-all-tiers).
+Telemetry: `docs/results/t2-final/<file>.jsonl` (per-100-byte BPB, bit costs, match stats).
 
-| File | Type | BPB (post-A) | BPB (pre-S1) | Delta |
-|---|---|---|---|---|
-| xml | Structured markup | **0.5212** | 0.5689 | -0.0477 |
-| nci | Chemical data | **0.5360** | 0.5913 | -0.0553 |
-| samba | Source code (C) | **1.1445** | 1.1846 | -0.0401 |
-| reymont | Polish text | **1.4778** | 1.5172 | -0.0394 |
-| dickens | English text | **1.5465** | 1.5766 | -0.0301 |
-| webster | English dict | **1.5664** | 1.5967 | -0.0303 |
-| mozilla | Executable | **1.6404** | 1.7227 | -0.0823 |
-| mr | Medical image | **1.9375** | 2.0466 | -0.1091 |
-| ooffice | Office binary | **2.5691** | 2.6394 | -0.0703 |
-| osdb | MySQL database | **4.2812** | 4.3301 | -0.0489 |
-| x-ray | Medical X-ray | **4.0903** | 4.2643 | -0.1740 |
-| sao | Astronomy SAO | **6.0483** | 6.1083 | -0.0600 |
-| **Mean (all 12)** | | **2.2799** | 2.3456 | -0.0657 |
-| **σ (all 12)** | | **1.6843** | 1.6269 | +0.0574 |
-| **Text-like mean (6)** | | **1.1321** | 1.1725 | -0.0404 |
-| **Binary mean (6)** | | **3.4278** | 3.5186 | -0.0908 |
+| File | Type | BPB (FINAL) | BPB (pre-S1) | Delta | B/s | Tokens |
+|---|---|---|---|---|---|---|
+| xml | Structured markup | **0.5212** | 0.5689 | -0.0477 | 58 | 4506 |
+| nci | Chemical data | **0.5360** | 0.5913 | -0.0553 | 48 | 5838 |
+| samba | Source code (C) | **1.1445** | 1.1846 | -0.0401 | 105 | 2851 |
+| reymont | Polish text | **1.4778** | 1.5172 | -0.0394 | 53 | 6201 |
+| dickens | English text | **1.5465** | 1.5766 | -0.0301 | 133 | 2460 |
+| webster | English dict | **1.5664** | 1.5967 | -0.0303 | 122 | 2519 |
+| mozilla | Executable | **1.6404** | 1.7227 | -0.0823 | 46 | 8065 |
+| mr | Medical image | **1.9375** | 2.0466 | -0.1091 | 36 | 9341 |
+| ooffice | Office binary | **2.5691** | 2.6394 | -0.0703 | 29 | 9680 |
+| osdb | MySQL database | **4.2812** | 4.3301 | -0.0489 | 36 | 7721 |
+| x-ray | Medical X-ray | **4.0903** | 4.2643 | -0.1740 | 30 | 9966 |
+| sao | Astronomy SAO | **6.0483** | 6.1083 | -0.0600 | 29 | 9525 |
+| **Mean (all 12)** | | **2.2799** | 2.3456 | -0.0657 | **62** | |
+| **σ (all 12)** | | **1.6843** | 1.6269 | +0.0574 | | |
+| **Text-like mean (6)** | | **1.1321** | 1.1725 | -0.0404 | **78** | |
+| **Binary mean (6)** | | **3.4278** | 3.5186 | -0.0908 | **34** | |
 
 ### Cross-Domain (adversarial — 10KB)
 
