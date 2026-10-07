@@ -403,7 +403,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut use_lstm = false;
     let mut use_hierarchical = false;
     let mut use_match = false;
-    let mut use_expert = true;
+    let mut use_expert = false;
     let mut expert_lr: f32 = 0.01;
     let mut lstm_hidden: usize = 128;
     let mut lstm_lr: f32 = 0.002;
@@ -644,14 +644,10 @@ fn cmd_hybrid_eval(args: &[String]) {
                 }
             }
         } else {
-            // First token: no RWKV context yet — use uniform placeholder
-            // to keep external group count stable across all tokens.
+            // First token: CM only (no RWKV context yet)
             for &byte in tok_bytes {
                 let bit_costs = [0.0f64; 8];
                 let mut externals: Vec<[f32; 8]> = Vec::new();
-
-                // Uniform RWKV placeholder (P(bit=1)=0.5 for all bits)
-                externals.push([0.5f32; 8]);
 
                 let match_len = if let Some(ref mm) = match_model {
                     let (match_byte_probs, ml) = mm.predict();
@@ -665,7 +661,11 @@ fn cmd_hybrid_eval(args: &[String]) {
                 }
 
                 let ext_refs: Vec<&[f32; 8]> = externals.iter().collect();
-                let bits = cm.process_byte_with_externals(byte, &ext_refs);
+                let bits = if !ext_refs.is_empty() {
+                    cm.process_byte_with_externals(byte, &ext_refs)
+                } else {
+                    cm.process_byte(byte)
+                };
                 total_bits += bits;
                 if let Some(ref mut log) = logger {
                     log.record_byte(bits, &HybridLogSnapshot { bit_costs, match_len });
