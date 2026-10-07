@@ -140,6 +140,8 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | R32 | G1d 0.1B checkpoint eval | +0.0693 enwik8, +0.3324 samba | **KILLED** |
 | R33 | CM scaling A1 Phase 1 | +0.0027 BPB 100KB (neutral on text) | **DONE** |
 | R34 | Roadmap audit + 5-thread research | LSTM depth is #1 gap, not CM count | **DONE** |
+| R45 | T2 final Silesia eval (12+2 files) | T1: mean=1.4674. T2: mean=2.2799. Telemetry. | **DONE** |
+| R46 | Domain analysis + MoE feasibility | 4 clusters, 3 failure factors, MoE levels defined | **DONE** |
 | S1 | LSTM: coupled gates (i=1-f) | +0.0033 neutral, -25% params, +15% speed | **DONE** |
 | S2 | LSTM: LayerNorm per-gate | -0.0057 (100KB), -0.0510 (10KB early boost) | **DONE** |
 | S3 | LSTM: BPTT=8 + Adam(beta1≈0) | -0.0055 (100KB), -0.0017 (10KB). 148 B/s. | **DONE** |
@@ -173,16 +175,44 @@ the same result: the architecture is at a **hard local minimum** at
 The ONLY gains that worked (S2 LayerNorm -0.0057, S3 BPTT=8 -0.0055) improved
 existing components rather than adding new ones.
 
+### Cross-domain analysis (R46)
+
+Four domain clusters identified. Three orthogonal failure factors quantified:
+tokenization quality (40% of BPB variance), intrinsic entropy (35%),
+RWKV pretraining alignment (25%). Key insight: **context mixing IS soft MoE** —
+the gap vs cmix is scale + preprocessing, not routing mechanism.
+
+Dynamic CM instantiation analyzed and found risky at current scale:
+- CMs with few observations produce confident but unreliable predictions
+- LSTM mixer cannot distinguish real vs spurious confidence (no observation count)
+- Adding/removing groups destabilizes mixer convergence (same pattern as R44)
+- Only viable with self-gating + minimum observation threshold + >1MB data
+
+### Tier N — New directions (R46, post-analysis)
+
+| # | Action | Est. Delta | Effort | Rationale |
+|---|---|---|---|---|
+| N1 | Measure RWKV per-domain contribution | Diagnostic | Low | Run CM-only eval on Cluster C/D files. If RWKV <0.05 BPB on binary: adaptive bypass saves compute. |
+| N2 | Entropy signals as mixer input | -0.005 to -0.02 | Low | Feed rolling entropy + ASCII ratio + match HR to LSTM. Free information for implicit routing. Validated by MoE-LC (WWW 2026). |
+| N3 | E8/E9 reversible transform (executables) | -0.01 to -0.05 | Med | Every sub-1.0 compressor uses this. Convert relative→absolute addresses. Improves ALL models on .exe data. |
+| N4 | Delta coding (numerical data) | -0.01 to -0.03 | Med | Reduces entropy of sequential numeric data. Benefits OEIS cluster specifically. |
+| N5 | Specialized CM contexts (PixelModel, RecordModel) | -0.02 to -0.10 | High | Pre-blend into Group 1 to avoid mixer overhead. Addresses Cluster C/D root cause: CM lacks domain-specific hash functions. |
+| N6 | Full enwik8 100MB eval | -0.015 est. | Time | 8-13 days CPU. Validates whether mixer improvements (S2/S3) scale with data. Unblocks scale-dependent items (N5, APM). |
+
+Priority order: N1 → N2 → N6 → N3 → N4 → N5.
+N1-N2 are diagnostic/low-risk. N6 is the gate for scale-dependent improvements.
+N3-N4 are proven in ecosystem. N5 is the highest-impact but highest-risk.
+
 ### Path forward
 
 ```
 1.1852  current (post Tier S+A+B+C)
-1.17    + full enwik8 100MB convergence (est. -0.015, requires 8-13 days)
-1.16    ceiling without GPU (conservative)
+1.17    + N2 entropy signals + N6 full enwik8 convergence (est. -0.015)
+1.14    + N3/N4 preprocessing transforms (est. -0.03)
+1.10    + N5 specialized CM contexts (est. -0.04, speculative)
+1.05    CPU ceiling (optimistic, requires all of above)
+<1.0    requires domain-tuned neural model (GPU) or OmniZip-style MoE in RWKV
 ```
-
-Sub-1.0 requires domain-tuned neural model (GPU). All CPU-accessible
-improvements have been exhausted at evaluation scale.
 
 ## Constraints
 
