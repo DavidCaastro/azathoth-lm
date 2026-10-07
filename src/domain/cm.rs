@@ -580,97 +580,6 @@ impl BitMixer {
     }
 }
 
-// --- APM (Adaptive Probability Map) ---
-//
-// Post-mixer correction stage. Takes (prediction, context) → refined prediction.
-// Each APM is a table of stretched probabilities indexed by (context, quantized_input).
-// Interpolates between adjacent bins for smooth output.
-// cmix uses SSE post-LSTM; Gleipnir uses 11 APM stages with distinct contexts.
-// Heritage: SSE failure was context reuse, not fundamental.
-
-const APM_BINS: usize = 33; // quantization bins for input probability
-
-#[allow(dead_code)]
-struct Apm {
-    /// Stretched probability table: [n_contexts][APM_BINS]
-    table: Vec<f32>,
-    n_contexts: usize,
-    lr: f32,
-    /// Cached state for update
-    cached_ctx: usize,
-    cached_bin: usize,
-    cached_weight: f32,
-}
-
-#[allow(dead_code)]
-impl Apm {
-    fn new(n_contexts: usize, lr: f32) -> Self {
-        // Initialize table so that APM is initially identity: output ≈ input
-        let mut table = vec![0.0f32; n_contexts * APM_BINS];
-        for ctx in 0..n_contexts {
-            for bin in 0..APM_BINS {
-                // Map bin to probability, then stretch
-                let p = (bin as f32 + 0.5) / APM_BINS as f32;
-                table[ctx * APM_BINS + bin] = stretch(p);
-            }
-        }
-        Self {
-            table,
-            n_contexts,
-            lr,
-            cached_ctx: 0,
-            cached_bin: 0,
-            cached_weight: 0.0,
-        }
-    }
-
-    fn memory_bytes(&self) -> usize {
-        self.table.len() * 4
-    }
-
-    /// Refine prediction using context.
-    /// Returns refined P(bit=1).
-    #[inline]
-    fn predict(&mut self, p: f32, context: usize) -> f32 {
-        let ctx = context % self.n_contexts;
-        // Quantize input probability to bin (with fractional part for interpolation)
-        let p_clamped = p.clamp(0.0001, 0.9999);
-        let pos = p_clamped * (APM_BINS - 1) as f32;
-        let bin = (pos as usize).min(APM_BINS - 2);
-        let w = pos - bin as f32; // interpolation weight (0..1)
-
-        let base = ctx * APM_BINS;
-        let s0 = self.table[base + bin];
-        let s1 = self.table[base + bin + 1];
-        let stretched_out = s0 + w * (s1 - s0);
-
-        // Cache for update
-        self.cached_ctx = ctx;
-        self.cached_bin = bin;
-        self.cached_weight = w;
-
-        squash(stretched_out)
-    }
-
-    /// Update APM table after observing bit.
-    #[inline]
-    fn update(&mut self, bit: u8) {
-        let base = self.cached_ctx * APM_BINS;
-        let bin = self.cached_bin;
-        let w = self.cached_weight;
-        let target = bit as f32; // 0.0 or 1.0
-
-        // Update both adjacent bins proportionally
-        let s0 = self.table[base + bin];
-        let p0 = squash(s0);
-        self.table[base + bin] += self.lr * (1.0 - w) * (target - p0);
-
-        let s1 = self.table[base + bin + 1];
-        let p1 = squash(s1);
-        self.table[base + bin + 1] += self.lr * w * (target - p1);
-    }
-}
-
 // --- Mixer dispatch ---
 
 enum MixerKind {
@@ -699,16 +608,10 @@ pub struct ContextMixer {
     max_history: usize,
     history_len: usize,
     pred_buf: Vec<f32>,
-    /// APM stages for post-mixer correction (A1).
-    /// Stage 0: context = bit_position (8 contexts)
-    /// Stage 1: context = last_byte (256 contexts)
-    apm_stages: Vec<Apm>,
 }
 
 // Sparse model offset tables (static lifetime).
 static SPARSE_SKIP1: &[usize] = &[1, 3];       // byte[-1], byte[-3]: skip-1 bigram
-static SPARSE_SKIP2: &[usize] = &[1, 4];       // byte[-1], byte[-4]: skip-2 bigram
-static SPARSE_SKIP3: &[usize] = &[2, 4];       // byte[-2], byte[-4]: even positions
 static SPARSE_WIDE: &[usize] = &[1, 2, 4, 8];  // multi-scale sparse context
 
 impl ContextMixer {
@@ -768,7 +671,6 @@ impl ContextMixer {
             max_history,
             history_len: 0,
             pred_buf: vec![0.0f32; n_models],
-            apm_stages: Vec::new(),
         }
     }
 
@@ -784,7 +686,6 @@ impl ContextMixer {
             max_history,
             history_len: 0,
             pred_buf: vec![0.0f32; n_models],
-            apm_stages: Vec::new(),
         }
     }
 
@@ -805,13 +706,6 @@ impl ContextMixer {
         let top_lstm = LstmBitMixer::new_with_layers(n_groups, hidden_dim, lr, n_layers);
         // APM post-LSTM correction stages (A1)
         // Stage 0: bit position context (8 entries × 33 bins = 1.1 KB)
-        // Stage 1: last byte context (256 entries × 33 bins = 33.8 KB)
-        // APM stages: disabled. A1 experiments showed +0.10 regression on 10KB.
-        // cmix uses SSE post-LSTM but with BPTT=100 on full enwik8 (800M bits).
-        // At 80K-800K bits, APM bins are too sparse to learn meaningful corrections.
-        // The LSTM is already well-calibrated; post-correction overcorrects.
-        // APM code retained for future use when processing larger datasets.
-        let apm_stages = Vec::new();
         Self {
             models,
             mixer: MixerKind::Hierarchical {
@@ -824,7 +718,6 @@ impl ContextMixer {
             max_history,
             history_len: 0,
             pred_buf: vec![0.0f32; Self::N_MODELS],
-            apm_stages,
         }
     }
 
@@ -951,37 +844,11 @@ impl ContextMixer {
                 }
             };
 
-            // APM post-mixer correction (A1): each stage refines the prediction
-            let mut refined = prediction;
-            if !self.apm_stages.is_empty() {
-                let last_byte = if self.history_len > 0 {
-                    let idx = if self.history_len <= self.max_history {
-                        self.history_len - 1
-                    } else {
-                        (self.history_len - 1) % self.max_history
-                    };
-                    self.history[idx] as usize
-                } else {
-                    0
-                };
-                // Stage 0: bit position context
-                refined = self.apm_stages[0].predict(refined, j as usize);
-                // Stage 1: last byte context
-                if self.apm_stages.len() > 1 {
-                    refined = self.apm_stages[1].predict(refined, last_byte);
-                }
-            }
-
-            let p_correct = if bit == 1 { refined } else { 1.0 - refined };
+            let p_correct = if bit == 1 { prediction } else { 1.0 - prediction };
             let bit_cost = -(p_correct as f64).max(1e-15).log2();
             total_bits += bit_cost;
             if let Some(bc) = bit_costs_out.as_deref_mut() {
                 bc[j as usize] = bit_cost;
-            }
-
-            // Update APM stages (reverse order for proper gradient flow)
-            for apm in self.apm_stages.iter_mut().rev() {
-                apm.update(bit);
             }
 
             match &mut self.mixer {

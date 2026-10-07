@@ -8,3 +8,7 @@
 model.ckpt/
 *.jsonl
 *.log
+# Windows build artifacts
+nul.*
+*.rcgu.o
+*.pdb

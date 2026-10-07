@@ -23,7 +23,30 @@ Proceso: investigar → evaluar licencia → auditar codigo → adaptar a Rust
 Los pesos son datos, no dependencias de compilacion.
 Almacenar en `weights/` (gitignored si >100MB, tracked si <100MB).
 
-Estrategia (en orden de preferencia):
+### MANIFEST OBLIGATORIO
+
+Toda descarga de pesos DEBE registrarse en `weights/MANIFEST.md`:
+- Fuente exacta (repo HuggingFace, URL de descarga)
+- Procedimiento de restauracion paso a paso
+- BPB baseline verificado
+- Formato de keys (BlinkDL vs HuggingFace)
+
+**NUNCA eliminar un directorio de weights sin verificar el MANIFEST.**
+**NUNCA eliminar el directorio DEFAULT** (`rwkv7-0.1b`) — todos los
+baselines dependen de el. Eliminar los weights default invalida
+TODOS los resultados historicos y requiere re-evaluacion completa.
+
+### Reproducibilidad de resultados
+
+Todo resultado experimental DEBE documentar:
+1. **Comando exacto** ejecutado (copiar/pegar, no resumir)
+2. **Path de weights** usado (`--weights X`)
+3. **Bytes evaluados** (`--bytes N`)
+4. **BPB obtenido** (4 decimales)
+
+Sin esta informacion, el resultado NO es reproducible y NO es valido.
+
+### Estrategia (en orden de preferencia)
 1. **Adoptar pesos existentes** — RWKV-7 oficial, HuggingFace (cero costo)
 2. **Destilar de modelo mayor** — teacher 0.4B → student custom (horas)
 3. **Fine-tune de checkpoint existente** — LoRA o full, pocas epocas (horas)

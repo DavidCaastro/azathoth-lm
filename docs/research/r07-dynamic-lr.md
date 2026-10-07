@@ -1,7 +1,7 @@
 # R07: Surprise-Modulated Dynamic Learning Rate
 
 **Date**: 2026-10-02
-**Status**: In Progress (100KB validation running)
+**Status**: Complete — KILLED (regresses on 100KB, superseded by R08 mixer)
 **Purpose**: Replace static bias_lr with data-driven adaptive lr
 
 ## 1. Motivation

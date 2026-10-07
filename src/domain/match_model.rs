@@ -99,62 +99,6 @@ impl MatchModel {
         h
     }
 
-    /// Return per-context-length match predictions for multi-input mixing (A2).
-    /// Each entry: (byte_probs, match_length) for context lengths that had a match.
-    /// Provides diverse signals to the mixer instead of collapsing to best-only.
-    #[allow(dead_code)]
-    pub fn predict_multi(&self) -> Vec<([f32; 256], usize)> {
-        if self.pos < 4 {
-            return Vec::new();
-        }
-
-        let mut results = Vec::new();
-
-        for (ti, &ctx_len) in self.context_lens.iter().enumerate() {
-            if self.pos < ctx_len {
-                continue;
-            }
-
-            let ctx_start = self.pos - ctx_len;
-            let hash = self.hash_context(ctx_start, self.pos);
-            let candidates = self.tables[ti].lookup(hash);
-
-            let mut matches: Vec<Match> = Vec::new();
-            for &cand_pos in candidates {
-                if cand_pos == u32::MAX { continue; }
-                let cand = cand_pos as usize;
-                if cand < ctx_len || cand + 1 >= self.pos { continue; }
-
-                let cand_start = cand - ctx_len;
-                let verified_len = self.verify_match(cand_start, ctx_start, ctx_len);
-                if verified_len >= ctx_len {
-                    matches.push(Match { pos: cand_pos, len: verified_len as u32 });
-                }
-            }
-
-            if matches.is_empty() {
-                continue;
-            }
-
-            let smooth = 0.1f32;
-            let mut counts = [0.0f32; 256];
-            for m in &matches {
-                let next_pos = m.pos as usize;
-                if next_pos < self.data.len() {
-                    counts[self.data[next_pos] as usize] += m.len as f32;
-                }
-            }
-            let total: f32 = counts.iter().sum::<f32>() + 256.0 * smooth;
-            let mut probs = [0.0f32; 256];
-            for i in 0..256 {
-                probs[i] = (counts[i] + smooth) / total;
-            }
-            results.push((probs, ctx_len));
-        }
-
-        results
-    }
-
     /// Find the longest match in history. Returns the byte distribution
     /// based on what follows the matches found.
     /// Returns (byte_probs, best_match_length).

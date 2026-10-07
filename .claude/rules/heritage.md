@@ -32,6 +32,12 @@ esta vez seria diferente.
 - Entropy-adaptive scaling: mixer ya maneja pesos de componentes
 - PPM exclusion en logistic mixer: scale mismatch, overfitting masivo
 - PPM pre-blend: pierde per-byte specialization
+- LstmExpert (44K params) at <1MB: +0.15 BPB at 10KB, +0.013 at 100KB.
+  Noise at low byte:param ratio. Shared group WORSE than own group
+  (contaminates RWKV/match sub-mixer). Tested twice (R44). Only viable >1MB.
+- Deleting default weights directory: invalidates ALL historical baselines.
+  Weight path is an implicit parameter of every result. Must verify
+  MANIFEST.md before any deletion. Incident: 2026-10-07, cost ~3h debugging.
 
 ## De edge-lm (Flux WHT, ~2.16 BPB)
 
