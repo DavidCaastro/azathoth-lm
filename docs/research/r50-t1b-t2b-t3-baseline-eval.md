@@ -165,37 +165,44 @@ This enables live monitoring of eval progress via `tail -f` or `wc -l`.
 **Do not apply during R50 eval run** — the binary is already running.
 Apply after R50 results are collected.
 
-### IMPLEMENTED: --save-state (cm_state.bin)
+### IMPLEMENTED: --save-state v2 (cm_state.bin + metadata)
 
 `--save-state PATH` flag added to `hybrid-eval`. Serializes the complete
-online-learned state after eval completes:
+online-learned state + rich metadata after eval completes.
 
+#### State data:
 - **CM hash tables**: all 14 models (raw Slot data, ~97.6 MB)
 - **Mixer weights**: hierarchical sub-mixers + top LSTM (weights, bias, LN, Adam state)
 - **MatchModel**: observed data buffer + hash tables (~32.5 MB)
 - **History**: byte history buffer + word model hashes + indirect model state
 
-Format: `AZ01` magic + version tag + tagged sections + EOF marker.
+#### Embedded metadata (JSON, section 0x06):
+- **Identity**: input path, content hash, total size, bytes evaluated
+- **Result**: BPB final, per-bit cost distribution [0-7], throughput, elapsed time
+- **Tokenization**: token count, bytes/token ratio (key throughput/domain indicator)
+- **Config**: model name, weights path, mixer type/params, surgery, e8e9, CM count
+- **Convergence**: LSTM Adam steps (adam_t), match model observed bytes
+- **Domain cluster**: automatic A/B/C/D classification (R46 criteria)
+- **Timestamp**: Barcelona time
+
+Format: `AZ02` magic + version 2 + tagged sections + EOF marker.
 Little-endian, version-tagged, no external dependencies.
+Metadata section placed first so tools can read it without parsing model state.
+
+#### Also fixed: JSONL real-time flush
+Added `file.flush()` after each JSONL entry write. Enables `tail -f` and
+`wc -l` monitoring during eval. Overhead: negligible (~1 syscall/1000 bytes).
 
 Files modified:
-- `src/domain/state_io.rs` — save/load orchestration (new)
-- `src/domain/cm.rs` — `serialize_state()` / `deserialize_state()`
+- `src/domain/state_io.rs` — save/load + StateMetadata + hash (new)
+- `src/domain/cm.rs` — `serialize_state()` / `deserialize_state()` / `lstm_adam_t()`
 - `src/domain/lstm_mixer.rs` — `serialize_into()` / `deserialize_from()`
-- `src/domain/match_model.rs` — `serialize_state()` / `deserialize_state()`
-- `src/main.rs` — `--save-state PATH` CLI flag
+- `src/domain/match_model.rs` — `serialize_state()` / `deserialize_state()` / `data_len()`
+- `src/main.rs` — `--save-state PATH`, per-bit cost accumulation, metadata construction
+- `src/application/telemetry.rs` — real-time flush after each JSONL entry
 
-Usage:
-```bash
-./target/release/azathoth-lm.exe hybrid-eval \
-  --input data/enwik8 --bytes 100000 \
-  --hierarchical --match --emb-surgery center0.3 --e8e9 \
-  --save-state states/enwik8-100k.bin
-```
-
-**Not available in R50 eval run** — binary was already running when implemented.
-Recompile after eval completes. `--load-state` (deserialize) wired in code but
-not yet exposed as CLI flag.
+Run 2 script: `run-eval-all-v2.sh` (replaces Run 1).
+States saved to: `states/t1b/`, `states/t2b/`, `states/t3/`.
 
 ## Time Estimates
 

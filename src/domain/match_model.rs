@@ -84,6 +84,11 @@ impl MatchModel {
         }
     }
 
+    /// Number of bytes observed (for metadata).
+    pub fn data_len(&self) -> usize {
+        self.data.len()
+    }
+
     pub fn memory_bytes(&self) -> usize {
         self.data.capacity()
             + self.tables.iter().map(|t| t.memory_bytes()).sum::<usize>()

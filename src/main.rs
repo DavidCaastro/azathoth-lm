@@ -528,6 +528,8 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut byte_count = 0usize;
     let mut skipped_tokens = 0usize;
     let mut skipped_bytes = 0usize;
+    let mut cum_bit_costs = [0.0f64; 8];
+    let mut cum_bit_count = 0u64;
 
     eprintln!("[hybrid] evaluating ...");
     eprintln!();
@@ -611,8 +613,9 @@ fn cmd_hybrid_eval(args: &[String]) {
                     }
 
                     let ext_refs: Vec<&[f32; 8]> = externals.iter().collect();
+                    let need_detailed = logger.is_some() || save_state_path.is_some();
                     let bits = if ext_refs.len() > 1 {
-                        if logger.is_some() {
+                        if need_detailed {
                             cm.process_byte_with_externals_detailed(byte, &ext_refs, &mut bit_costs)
                         } else {
                             cm.process_byte_with_externals(byte, &ext_refs)
@@ -620,6 +623,13 @@ fn cmd_hybrid_eval(args: &[String]) {
                     } else {
                         cm.process_byte_with_external(byte, &rwkv_bit_preds)
                     };
+
+                    if need_detailed {
+                        for i in 0..8 {
+                            cum_bit_costs[i] += bit_costs[i];
+                        }
+                        cum_bit_count += 1;
+                    }
 
                     total_bits += bits;
                     if let Some(ref mut log) = logger {
@@ -709,10 +719,50 @@ fn cmd_hybrid_eval(args: &[String]) {
 
     // Save state if requested
     if let Some(ref state_path) = save_state_path {
+        use crate::domain::state_io::{StateMetadata, sha256_first_n};
+        use crate::application::telemetry::now_barcelona;
+
+        let avg_bit_costs = if cum_bit_count > 0 {
+            let n = cum_bit_count as f64;
+            [cum_bit_costs[0]/n, cum_bit_costs[1]/n, cum_bit_costs[2]/n, cum_bit_costs[3]/n,
+             cum_bit_costs[4]/n, cum_bit_costs[5]/n, cum_bit_costs[6]/n, cum_bit_costs[7]/n]
+        } else {
+            [0.0; 8]
+        };
+
+        let bpt = total_bytes as f64 / tokens.len().max(1) as f64;
+
+        let meta = StateMetadata {
+            input_path: input_path.clone(),
+            input_sha256: sha256_first_n(&eval_bytes, 100_000),
+            input_size_total: eval_bytes.len() as u64,
+            bytes_evaluated: byte_count as u64,
+            bpb_final: final_bpb,
+            per_bit_costs: avg_bit_costs,
+            throughput_bps: byte_count as f64 / elapsed,
+            elapsed_secs: elapsed,
+            token_count: tokens.len() as u64,
+            bytes_per_token: bpt,
+            model_name: "RWKV-7 0.1B Q8".to_string(),
+            weights_path: weights_dir.clone(),
+            mixer_type: mixer_str.clone(),
+            mixer_params: mixer_params as u64,
+            emb_surgery: emb_surgery.clone().unwrap_or_else(|| "none".to_string()),
+            e8e9_enabled: use_e8e9,
+            cm_model_count: cm.n_models() as u32,
+            cm_memory_mb: cm_mem_mb,
+            match_memory_mb: match_mem_mb,
+            lstm_adam_t: cm.lstm_adam_t(),
+            match_total_bytes: match_model.as_ref().map(|m| m.data_len() as u64).unwrap_or(0),
+            domain_cluster: StateMetadata::classify_domain(final_bpb, bpt),
+            timestamp: now_barcelona(),
+        };
+
         crate::domain::state_io::save_state(
             state_path,
             &cm,
             match_model.as_ref(),
+            Some(&meta),
         ).unwrap_or_else(|e| eprintln!("[state] error saving: {}", e));
     }
 

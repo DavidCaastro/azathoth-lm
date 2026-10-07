@@ -732,6 +732,15 @@ impl ContextMixer {
     }
 
     /// Number of mixer parameters (0 for logistic, >0 for LSTM).
+    /// Get LSTM Adam optimizer step count (for metadata).
+    pub fn lstm_adam_t(&self) -> u64 {
+        match &self.mixer {
+            MixerKind::Lstm(m) => m.adam_t,
+            MixerKind::Hierarchical { top_lstm, .. } => top_lstm.adam_t,
+            MixerKind::Logistic(_) => 0,
+        }
+    }
+
     pub fn mixer_param_count(&self) -> usize {
         match &self.mixer {
             MixerKind::Logistic(_) => 0,

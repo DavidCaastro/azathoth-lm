@@ -242,6 +242,7 @@ impl HybridLogger {
             ts, elapsed, self.cum_bytes, bpb, bpb_w, bps,
             bc.join(","), self.win_match_hits, avg_match,
         );
+        let _ = self.file.flush(); // real-time flush for live monitoring
 
         self.win_bytes = 0;
         self.win_bits = 0.0;
