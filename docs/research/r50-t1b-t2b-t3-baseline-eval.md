@@ -199,6 +199,27 @@ Files modified:
 Run 2 script: `run-eval-all-v2.sh` (replaces Run 1).
 States saved to: `states/t1b/`, `states/t2b/`, `states/t3/`.
 
+#### State storage
+
+State files are stored locally in `states/` (gitignored).
+Each file is ~130 MB (97.6 MB CM tables + 32.5 MB match + mixer + metadata).
+Total for 25 evals: ~3.2 GB. These are reproducible artifacts — same input +
+same config = same state — so they are not version-controlled.
+
+To inspect embedded metadata without parsing model state:
+```bash
+# Metadata is the first section (tag 0x06) after the 8-byte header.
+# Skip 9 bytes (4 magic + 4 version + 1 tag), read section length, then JSON.
+python3 -c "
+import struct, sys, json
+d = open(sys.argv[1],'rb').read(8192)
+assert d[:4] == b'AZ02'
+tag = d[8]
+slen = struct.unpack('<Q', d[9:17])[0]
+print(json.dumps(json.loads(d[17:17+slen]), indent=2))
+" states/t1b/enwik8.bin
+```
+
 ## Time Estimates
 
 Based on measured throughput from T1/T2 10KB evals (R45):
