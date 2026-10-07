@@ -165,6 +165,38 @@ This enables live monitoring of eval progress via `tail -f` or `wc -l`.
 **Do not apply during R50 eval run** — the binary is already running.
 Apply after R50 results are collected.
 
+### IMPLEMENTED: --save-state (cm_state.bin)
+
+`--save-state PATH` flag added to `hybrid-eval`. Serializes the complete
+online-learned state after eval completes:
+
+- **CM hash tables**: all 14 models (raw Slot data, ~97.6 MB)
+- **Mixer weights**: hierarchical sub-mixers + top LSTM (weights, bias, LN, Adam state)
+- **MatchModel**: observed data buffer + hash tables (~32.5 MB)
+- **History**: byte history buffer + word model hashes + indirect model state
+
+Format: `AZ01` magic + version tag + tagged sections + EOF marker.
+Little-endian, version-tagged, no external dependencies.
+
+Files modified:
+- `src/domain/state_io.rs` — save/load orchestration (new)
+- `src/domain/cm.rs` — `serialize_state()` / `deserialize_state()`
+- `src/domain/lstm_mixer.rs` — `serialize_into()` / `deserialize_from()`
+- `src/domain/match_model.rs` — `serialize_state()` / `deserialize_state()`
+- `src/main.rs` — `--save-state PATH` CLI flag
+
+Usage:
+```bash
+./target/release/azathoth-lm.exe hybrid-eval \
+  --input data/enwik8 --bytes 100000 \
+  --hierarchical --match --emb-surgery center0.3 --e8e9 \
+  --save-state states/enwik8-100k.bin
+```
+
+**Not available in R50 eval run** — binary was already running when implemented.
+Recompile after eval completes. `--load-state` (deserialize) wired in code but
+not yet exposed as CLI flag.
+
 ## Time Estimates
 
 Based on measured throughput from T1/T2 10KB evals (R45):

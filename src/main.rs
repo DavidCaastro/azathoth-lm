@@ -44,7 +44,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N] [--e8e9]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--match] [--expert] [--expert-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--match] [--expert] [--expert-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--save-state PATH]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -411,6 +411,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut log_path: Option<String> = None;
     let mut emb_surgery: Option<String> = None;
     let mut use_e8e9 = false;
+    let mut save_state_path: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -430,6 +431,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--log" => { i += 1; log_path = Some(args[i].clone()); }
             "--emb-surgery" => { i += 1; emb_surgery = Some(args[i].clone()); }
             "--e8e9" => { use_e8e9 = true; }
+            "--save-state" => { i += 1; save_state_path = Some(args[i].clone()); }
             _ => {}
         }
         i += 1;
@@ -703,6 +705,15 @@ fn cmd_hybrid_eval(args: &[String]) {
     if let Some(ref mut log) = logger {
         log.finalize();
         eprintln!("[hybrid] log written: {}", log_path.as_ref().unwrap());
+    }
+
+    // Save state if requested
+    if let Some(ref state_path) = save_state_path {
+        crate::domain::state_io::save_state(
+            state_path,
+            &cm,
+            match_model.as_ref(),
+        ).unwrap_or_else(|e| eprintln!("[state] error saving: {}", e));
     }
 
     eprintln!();

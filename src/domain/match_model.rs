@@ -187,6 +187,83 @@ impl MatchModel {
         len
     }
 
+    /// Serialized size in bytes (for state_io pre-allocation).
+    pub fn serialized_size(&self) -> usize {
+        let table_bytes: usize = self.tables.iter()
+            .map(|t| t.entries.len() * 4 * std::mem::size_of::<u32>())
+            .sum();
+        4 + 8 + self.data.len() + 4 + (self.tables.len() * 4) + table_bytes
+    }
+
+    /// Serialize match model state to bytes.
+    pub fn serialize_state(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+
+        // Data buffer (observed bytes)
+        out.extend_from_slice(&(self.data.len() as u64).to_le_bytes());
+        out.extend_from_slice(&self.data);
+        out.extend_from_slice(&(self.pos as u64).to_le_bytes());
+
+        // Hash tables
+        out.extend_from_slice(&(self.tables.len() as u32).to_le_bytes());
+        for table in &self.tables {
+            let raw = unsafe {
+                std::slice::from_raw_parts(
+                    table.entries.as_ptr() as *const u8,
+                    table.entries.len() * 4 * std::mem::size_of::<u32>(),
+                )
+            };
+            out.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+            out.extend_from_slice(raw);
+        }
+
+        out
+    }
+
+    /// Deserialize match model state from bytes.
+    #[allow(dead_code)] // will be used by --load-state CLI flag
+    pub fn deserialize_state(&mut self, data: &[u8]) {
+        let mut pos = 0;
+
+        // Data buffer
+        let data_len = u64::from_le_bytes([
+            data[pos], data[pos+1], data[pos+2], data[pos+3],
+            data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+        ]) as usize;
+        pos += 8;
+        self.data = data[pos..pos + data_len].to_vec();
+        pos += data_len;
+
+        self.pos = u64::from_le_bytes([
+            data[pos], data[pos+1], data[pos+2], data[pos+3],
+            data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+        ]) as usize;
+        pos += 8;
+
+        // Hash tables
+        let n_tables = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
+        pos += 4;
+        assert_eq!(n_tables, self.tables.len(), "table count mismatch");
+
+        for table in &mut self.tables {
+            let raw_len = u64::from_le_bytes([
+                data[pos], data[pos+1], data[pos+2], data[pos+3],
+                data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+            ]) as usize;
+            pos += 8;
+            let expected = table.entries.len() * 4 * std::mem::size_of::<u32>();
+            assert_eq!(raw_len, expected, "match table size mismatch");
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    data[pos..].as_ptr(),
+                    table.entries.as_mut_ptr() as *mut u8,
+                    expected,
+                );
+            }
+            pos += raw_len;
+        }
+    }
+
     /// Observe a byte and update hash tables.
     pub fn observe(&mut self, byte: u8) {
         self.data.push(byte);

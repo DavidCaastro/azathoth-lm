@@ -607,6 +607,119 @@ impl LstmBitMixer {
         let layer_params: usize = self.layers.iter().map(|l| l.param_count()).sum();
         layer_params + self.w_out.len() + self.b_out.len()
     }
+
+    /// Serialize LSTM mixer state to a byte buffer.
+    pub fn serialize_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&(self.n_models as u32).to_le_bytes());
+        out.extend_from_slice(&(self.hidden_dim as u32).to_le_bytes());
+        out.extend_from_slice(&(self.layers.len() as u32).to_le_bytes());
+        out.extend_from_slice(&self.adam_t.to_le_bytes());
+        out.extend_from_slice(&(self.bptt_step as u32).to_le_bytes());
+        out.extend_from_slice(&self.lr.to_le_bytes());
+
+        // Output layer
+        write_f32_vec(out, &self.w_out);
+        write_f32_vec(out, &self.b_out);
+
+        // Each LSTM layer
+        for layer in &self.layers {
+            write_f32_vec(out, &layer.w_ih);
+            write_f32_vec(out, &layer.w_hh);
+            write_f32_vec(out, &layer.bias);
+            write_f32_vec(out, &layer.ln_gamma);
+            write_f32_vec(out, &layer.ln_beta);
+            write_f32_vec(out, &layer.h);
+            write_f32_vec(out, &layer.c);
+            // Adam state
+            write_f32_vec(out, &layer.m_ih);
+            write_f32_vec(out, &layer.v_ih);
+            write_f32_vec(out, &layer.m_hh);
+            write_f32_vec(out, &layer.v_hh);
+            write_f32_vec(out, &layer.m_bias);
+            write_f32_vec(out, &layer.v_bias);
+            write_f32_vec(out, &layer.m_lg);
+            write_f32_vec(out, &layer.v_lg);
+            write_f32_vec(out, &layer.m_lb);
+            write_f32_vec(out, &layer.v_lb);
+        }
+    }
+
+    /// Deserialize LSTM mixer state from bytes. Returns new position.
+    #[allow(dead_code)] // will be used by --load-state CLI flag
+    pub fn deserialize_from(&mut self, data: &[u8], mut pos: usize) -> usize {
+        self.n_models = read_u32(data, &mut pos) as usize;
+        self.hidden_dim = read_u32(data, &mut pos) as usize;
+        let n_layers = read_u32(data, &mut pos) as usize;
+        self.adam_t = read_u64(data, &mut pos);
+        self.bptt_step = read_u32(data, &mut pos) as usize;
+        self.lr = read_f32(data, &mut pos);
+
+        pos = read_f32_vec(data, pos, &mut self.w_out);
+        pos = read_f32_vec(data, pos, &mut self.b_out);
+
+        assert_eq!(n_layers, self.layers.len(), "LSTM layer count mismatch");
+        for layer in &mut self.layers {
+            pos = read_f32_vec(data, pos, &mut layer.w_ih);
+            pos = read_f32_vec(data, pos, &mut layer.w_hh);
+            pos = read_f32_vec(data, pos, &mut layer.bias);
+            pos = read_f32_vec(data, pos, &mut layer.ln_gamma);
+            pos = read_f32_vec(data, pos, &mut layer.ln_beta);
+            pos = read_f32_vec(data, pos, &mut layer.h);
+            pos = read_f32_vec(data, pos, &mut layer.c);
+            pos = read_f32_vec(data, pos, &mut layer.m_ih);
+            pos = read_f32_vec(data, pos, &mut layer.v_ih);
+            pos = read_f32_vec(data, pos, &mut layer.m_hh);
+            pos = read_f32_vec(data, pos, &mut layer.v_hh);
+            pos = read_f32_vec(data, pos, &mut layer.m_bias);
+            pos = read_f32_vec(data, pos, &mut layer.v_bias);
+            pos = read_f32_vec(data, pos, &mut layer.m_lg);
+            pos = read_f32_vec(data, pos, &mut layer.v_lg);
+            pos = read_f32_vec(data, pos, &mut layer.m_lb);
+            pos = read_f32_vec(data, pos, &mut layer.v_lb);
+        }
+        pos
+    }
+}
+
+fn write_f32_vec(out: &mut Vec<u8>, v: &[f32]) {
+    out.extend_from_slice(&(v.len() as u32).to_le_bytes());
+    for &val in v {
+        out.extend_from_slice(&val.to_le_bytes());
+    }
+}
+
+#[allow(dead_code)]
+fn read_f32_vec(data: &[u8], mut pos: usize, v: &mut Vec<f32>) -> usize {
+    let n = read_u32(data, &mut pos) as usize;
+    v.resize(n, 0.0);
+    for i in 0..n {
+        v[i] = read_f32(data, &mut pos);
+    }
+    pos
+}
+
+#[allow(dead_code)]
+fn read_u32(data: &[u8], pos: &mut usize) -> u32 {
+    let val = u32::from_le_bytes([data[*pos], data[*pos+1], data[*pos+2], data[*pos+3]]);
+    *pos += 4;
+    val
+}
+
+#[allow(dead_code)]
+fn read_u64(data: &[u8], pos: &mut usize) -> u64 {
+    let val = u64::from_le_bytes([
+        data[*pos], data[*pos+1], data[*pos+2], data[*pos+3],
+        data[*pos+4], data[*pos+5], data[*pos+6], data[*pos+7],
+    ]);
+    *pos += 8;
+    val
+}
+
+#[allow(dead_code)]
+fn read_f32(data: &[u8], pos: &mut usize) -> f32 {
+    let val = f32::from_le_bytes([data[*pos], data[*pos+1], data[*pos+2], data[*pos+3]]);
+    *pos += 4;
+    val
 }
 
 #[cfg(test)]

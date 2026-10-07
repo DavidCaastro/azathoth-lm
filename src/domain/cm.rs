@@ -891,6 +891,250 @@ impl ContextMixer {
         total_bits
     }
 
+    // --- State serialization ---
+
+    /// Serialize all CM state (hash tables + mixer + history + word state) to bytes.
+    pub fn serialize_state(&self) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+
+        // 1. Number of models
+        out.extend_from_slice(&(self.models.len() as u32).to_le_bytes());
+
+        // 2. Hash tables from each model (raw Slot data)
+        for model in &self.models {
+            let table_bytes = model.table_as_bytes();
+            out.extend_from_slice(&(table_bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(table_bytes);
+        }
+
+        // 3. Mixer weights
+        match &self.mixer {
+            MixerKind::Logistic(m) => {
+                out.push(0x01); // tag: logistic
+                serialize_bit_mixer(&mut out, m);
+            }
+            MixerKind::Lstm(m) => {
+                out.push(0x02); // tag: lstm
+                m.serialize_into(&mut out);
+            }
+            MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, .. } => {
+                out.push(0x03); // tag: hierarchical
+                out.extend_from_slice(&(group_starts.len() as u32).to_le_bytes());
+                for &gs in group_starts {
+                    out.extend_from_slice(&(gs as u32).to_le_bytes());
+                }
+                out.extend_from_slice(&(sub_mixers.len() as u32).to_le_bytes());
+                for sm in sub_mixers {
+                    serialize_bit_mixer(&mut out, sm);
+                }
+                top_lstm.serialize_into(&mut out);
+            }
+        }
+
+        // 4. History
+        out.extend_from_slice(&(self.history_len as u64).to_le_bytes());
+        out.extend_from_slice(&(self.history.len() as u32).to_le_bytes());
+        out.extend_from_slice(&self.history);
+
+        // 5. Word model state (hashes)
+        for model in &self.models {
+            if let ContextModel::Word(wm) = model {
+                out.extend_from_slice(&wm.current_word_hash.to_le_bytes());
+                out.extend_from_slice(&wm.word0_hash.to_le_bytes());
+                out.extend_from_slice(&wm.word1_hash.to_le_bytes());
+                out.push(wm.in_word as u8);
+            }
+        }
+
+        // 6. Indirect model cached_ctx_hash
+        for model in &self.models {
+            if let ContextModel::Indirect(im) = model {
+                out.extend_from_slice(&(im.cached_ctx_hash as u64).to_le_bytes());
+            }
+        }
+
+        out
+    }
+
+    /// Deserialize CM state from bytes. Assumes same model configuration.
+    #[allow(dead_code)] // will be used by --load-state CLI flag
+    pub fn deserialize_state(&mut self, data: &[u8]) {
+        let mut pos = 0;
+
+        // 1. Number of models
+        let n_models = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
+        pos += 4;
+        assert_eq!(n_models, self.models.len(), "model count mismatch");
+
+        // 2. Hash tables
+        for model in &mut self.models {
+            let table_len = u64::from_le_bytes([
+                data[pos], data[pos+1], data[pos+2], data[pos+3],
+                data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+            ]) as usize;
+            pos += 8;
+            model.table_from_bytes(&data[pos..pos + table_len]);
+            pos += table_len;
+        }
+
+        // 3. Mixer
+        let mixer_tag = data[pos];
+        pos += 1;
+        match mixer_tag {
+            0x01 => {
+                if let MixerKind::Logistic(m) = &mut self.mixer {
+                    pos = deserialize_bit_mixer(&data, pos, m);
+                }
+            }
+            0x02 => {
+                if let MixerKind::Lstm(m) = &mut self.mixer {
+                    pos = m.deserialize_from(data, pos);
+                }
+            }
+            0x03 => {
+                if let MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf } = &mut self.mixer {
+                    let n_gs = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
+                    pos += 4;
+                    group_starts.clear();
+                    for _ in 0..n_gs {
+                        group_starts.push(u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize);
+                        pos += 4;
+                    }
+                    let n_sm = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
+                    pos += 4;
+                    sub_mixers.clear();
+                    for _ in 0..n_sm {
+                        let mut sm = BitMixer::new(1, 0.05);
+                        pos = deserialize_bit_mixer(data, pos, &mut sm);
+                        sub_mixers.push(sm);
+                    }
+                    pos = top_lstm.deserialize_from(data, pos);
+                    group_buf.resize(sub_mixers.len(), 0.5);
+                }
+            }
+            _ => panic!("unknown mixer tag: {:#x}", mixer_tag),
+        }
+
+        // 4. History
+        self.history_len = u64::from_le_bytes([
+            data[pos], data[pos+1], data[pos+2], data[pos+3],
+            data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+        ]) as usize;
+        pos += 8;
+        let hist_len = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
+        pos += 4;
+        self.history.clear();
+        self.history.extend_from_slice(&data[pos..pos + hist_len]);
+        pos += hist_len;
+
+        // 5. Word model state
+        for model in &mut self.models {
+            if let ContextModel::Word(wm) = model {
+                wm.current_word_hash = u64::from_le_bytes([
+                    data[pos], data[pos+1], data[pos+2], data[pos+3],
+                    data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                ]);
+                pos += 8;
+                wm.word0_hash = u64::from_le_bytes([
+                    data[pos], data[pos+1], data[pos+2], data[pos+3],
+                    data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                ]);
+                pos += 8;
+                wm.word1_hash = u64::from_le_bytes([
+                    data[pos], data[pos+1], data[pos+2], data[pos+3],
+                    data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                ]);
+                pos += 8;
+                wm.in_word = data[pos] != 0;
+                pos += 1;
+            }
+        }
+
+        // 6. Indirect model cached_ctx_hash
+        for model in &mut self.models {
+            if let ContextModel::Indirect(im) = model {
+                im.cached_ctx_hash = u64::from_le_bytes([
+                    data[pos], data[pos+1], data[pos+2], data[pos+3],
+                    data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                ]) as usize;
+                pos += 8;
+            }
+        }
+    }
+}
+
+// --- Serialization helpers for hash tables ---
+
+impl ContextModel {
+    fn table_as_bytes(&self) -> &[u8] {
+        match self {
+            ContextModel::Order(m) => slots_as_bytes(&m.table),
+            ContextModel::Sparse(m) => slots_as_bytes(&m.table),
+            ContextModel::Indirect(m) => {
+                // Indirect has both byte_history and table
+                // We serialize only the table; byte_history is small and reconstructible
+                slots_as_bytes(&m.table)
+            }
+            ContextModel::Word(m) => slots_as_bytes(&m.table),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn table_from_bytes(&mut self, data: &[u8]) {
+        match self {
+            ContextModel::Order(m) => slots_from_bytes(&mut m.table, data),
+            ContextModel::Sparse(m) => slots_from_bytes(&mut m.table, data),
+            ContextModel::Indirect(m) => slots_from_bytes(&mut m.table, data),
+            ContextModel::Word(m) => slots_from_bytes(&mut m.table, data),
+        }
+    }
+}
+
+fn slots_as_bytes(table: &[[Slot; 4]]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            table.as_ptr() as *const u8,
+            table.len() * std::mem::size_of::<[Slot; 4]>(),
+        )
+    }
+}
+
+#[allow(dead_code)]
+fn slots_from_bytes(table: &mut [[Slot; 4]], data: &[u8]) {
+    let expected = table.len() * std::mem::size_of::<[Slot; 4]>();
+    assert_eq!(data.len(), expected, "table size mismatch");
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            data.as_ptr(),
+            table.as_mut_ptr() as *mut u8,
+            expected,
+        );
+    }
+}
+
+fn serialize_bit_mixer(out: &mut Vec<u8>, m: &BitMixer) {
+    out.extend_from_slice(&(m.n_models as u32).to_le_bytes());
+    for w in &m.weights {
+        for &val in w {
+            out.extend_from_slice(&val.to_le_bytes());
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn deserialize_bit_mixer(data: &[u8], mut pos: usize, m: &mut BitMixer) -> usize {
+    let n = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
+    pos += 4;
+    m.n_models = n;
+    m.weights = (0..256).map(|_| {
+        let mut w = vec![0.0f32; n];
+        for v in &mut w {
+            *v = f32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]);
+            pos += 4;
+        }
+        w
+    }).collect();
+    pos
 }
 
 #[cfg(test)]
