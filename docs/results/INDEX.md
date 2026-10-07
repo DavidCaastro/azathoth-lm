@@ -67,6 +67,8 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R45 — T2 Final Silesia (12 files)** | **2.2799 mean** | **Identical to post-A. Tiers B+C = zero impact. Telemetry in t2-final/*.jsonl** |
 | **R46 — Domain analysis + MoE feasibility** | 4 clusters | **Tokenization (40%) + entropy (35%) + pretraining alignment (25%). Context mixing IS soft MoE.** |
 | **R47 — N1 RWKV per-domain contribution** | Diagnostic | **RWKV helps all 14 files (5-61%). No bypass viable. Contribution: A=51%, B=51%, C=28%, D=12%.** |
+| **R48 — Benchmark corpus investigation** | Research | **Silesia morphologically outdated. AIT DCC 2026 = best modern alternative. T3 suite designed.** |
+| **R49 — N3 E8/E9 transform** | Mixed | **ooffice -0.1811, mozilla +0.006, text neutral. T2 mean -0.0151. Preprocessing works.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
