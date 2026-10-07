@@ -2,8 +2,8 @@
 
 **Date**: 2026-10-07
 **Current best (enwik8)**: 1.1852 BPB (100KB, literature ref only)
-**Current composite (T1)**: mean=1.5213 | sigma=0.2814 | worst=1.9045 (5 files, with surgery)
-**Current composite (T2)**: mean=2.2799 | sigma=1.6843 | worst=6.0483 (12 Silesia files, post-Tier A + surgery)
+**Current composite (T1)**: mean=1.4674 | sigma=0.3030 | worst=1.8378 (5 files, FINAL post-all-tiers)
+**Current composite (T2)**: mean=2.2799 | sigma=1.6843 | worst=6.0483 (12 Silesia files, FINAL post-all-tiers)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
 **Primary metric**: Composite BPB (mean, sigma, worst) — see R28
 
@@ -52,18 +52,18 @@ primarily **data scale** (100KB vs 100MB) and **byte-level BPTT** (cmix: 100 byt
 = 800 bits, ours: 8 bits). All incremental improvements (Tier A+B) tested and
 found neutral at 100KB — architecture is at a local minimum at this scale.
 
-### Composite Baseline (Tier 1, 10KB each, with emb surgery center0.3)
+### Composite Baseline (Tier 1, 10KB each, FINAL post-all-tiers 2026-10-07)
 
-| File | Type | BPB |
-|---|---|---|
-| samba | Code | 1.1846 |
-| enwik8 | Text EN | 1.2180 |
-| dickens | Text EN | 1.5766 |
-| mozilla | Binary | 1.7227 |
-| OEIS | Numerical | 1.9045 |
-| **mean** | | **1.5213** |
-| **sigma** | | **0.2814** |
-| **worst** | | **1.9045** |
+| File | Type | BPB | B/s |
+|---|---|---|---|
+| samba | Code | 1.1445 | 105 |
+| enwik8 | Text EN | 1.1680 | 114 |
+| dickens | Text EN | 1.5465 | 133 |
+| mozilla | Binary | 1.6404 | 46 |
+| OEIS | Numerical | 1.8378 | 40 |
+| **mean** | | **1.4674** | |
+| **sigma** | | **0.3030** | |
+| **worst** | | **1.8378** | |
 
 ## What's Next
 

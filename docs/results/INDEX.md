@@ -102,25 +102,23 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 
 ## Benchmark Dashboard
 
-### Current Best — Composite (Tier 1: 5 files, 10KB each)
+### Current Best — Composite (Tier 1: 5 files, 10KB each, FINAL 2026-10-07)
 
-Note: T1 not yet re-evaluated with S3. Values below are pre-S1 with surgery.
-
-| Metric | With surgery | Pre-surgery | Delta | Verdict |
+| Metric | FINAL | Pre-S1 (surgery) | Delta | Verdict |
 |---|---|---|---|---|
-| **mean** | **1.5213** | 1.5595 | **-0.0382** | DOWN |
-| **sigma** | **0.2814** | 0.2923 | **-0.0109** | DOWN |
-| **worst** | **1.9045** (OEIS) | 1.9596 | **-0.0551** | DOWN |
+| **mean** | **1.4674** | 1.5213 | **-0.0539** | DOWN |
+| **sigma** | **0.3030** | 0.2814 | +0.0216 | UP (OEIS improved more) |
+| **worst** | **1.8378** (OEIS) | 1.9045 | **-0.0667** | DOWN |
 
-#### Tier 1 Detail (with emb surgery center0.3)
+#### Tier 1 Detail (FINAL, with emb surgery center0.3)
 
-| File | Type | BPB (surgery) | BPB (pre-surgery) | Delta |
-|---|---|---|---|---|
-| enwik8 (10KB) | Text EN | **1.2180** | 1.2408 | -0.0228 |
-| dickens (10KB) | Text EN | **1.5766** | 1.6154 | -0.0388 |
-| samba (10KB) | Code | **1.1846** | 1.2143 | -0.0297 |
-| mozilla (10KB) | Binary | **1.7227** | 1.7673 | -0.0446 |
-| OEIS (10KB) | Numerical | **1.9045** | 1.9596 | -0.0551 |
+| File | Type | BPB (FINAL) | BPB (pre-S1) | Delta | B/s |
+|---|---|---|---|---|---|
+| samba (10KB) | Code | **1.1445** | 1.1846 | -0.0401 | 105 |
+| enwik8 (10KB) | Text EN | **1.1680** | 1.2180 | -0.0500 | 114 |
+| dickens (10KB) | Text EN | **1.5465** | 1.5766 | -0.0301 | 133 |
+| mozilla (10KB) | Binary | **1.6404** | 1.7227 | -0.0823 | 46 |
+| OEIS (10KB) | Numerical | **1.8378** | 1.9045 | -0.0667 | 40 |
 
 ### Full Silesia Composite (Tier 2: 12 files, 10KB, FINAL 2026-10-07)
 
