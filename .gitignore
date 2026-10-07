@@ -6,6 +6,7 @@
 /weights/rwkv7-*/
 *.ckpt
 model.ckpt/
+/states/
 *.jsonl
 *.log
 # Windows build artifacts
