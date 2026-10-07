@@ -192,7 +192,7 @@ Dynamic CM instantiation analyzed and found risky at current scale:
 
 | # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| N1 | Measure RWKV per-domain contribution | Diagnostic | Low | Run CM-only eval on Cluster C/D files. If RWKV <0.05 BPB on binary: adaptive bypass saves compute. |
+| ~~N1~~ | ~~Measure RWKV per-domain contribution~~ | **Diagnostic DONE** | ~~Low~~ | **R47.** RWKV helps all 14 files (5-61%). No bypass viable. Contribution: A=51%, B=51%, C=28%, D=12%. Confirms N2 (entropy signals) as next step. |
 | N2 | Entropy signals as mixer input | -0.005 to -0.02 | Low | Feed rolling entropy + ASCII ratio + match HR to LSTM. Free information for implicit routing. Validated by MoE-LC (WWW 2026). |
 | N3 | E8/E9 reversible transform (executables) | -0.01 to -0.05 | Med | Every sub-1.0 compressor uses this. Convert relative→absolute addresses. Improves ALL models on .exe data. |
 | N4 | Delta coding (numerical data) | -0.01 to -0.03 | Med | Reduces entropy of sequential numeric data. Benefits OEIS cluster specifically. |

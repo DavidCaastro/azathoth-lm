@@ -66,6 +66,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | C3 — Modality-routing | KILLED | By analysis. Violates no-domain-detection. Same group overhead pattern. |
 | **R45 — T2 Final Silesia (12 files)** | **2.2799 mean** | **Identical to post-A. Tiers B+C = zero impact. Telemetry in t2-final/*.jsonl** |
 | **R46 — Domain analysis + MoE feasibility** | 4 clusters | **Tokenization (40%) + entropy (35%) + pretraining alignment (25%). Context mixing IS soft MoE.** |
+| **R47 — N1 RWKV per-domain contribution** | Diagnostic | **RWKV helps all 14 files (5-61%). No bypass viable. Contribution: A=51%, B=51%, C=28%, D=12%.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
