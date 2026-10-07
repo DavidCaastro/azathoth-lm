@@ -191,13 +191,13 @@ For comparison with 100KB results:
 
 ## Results
 
-*Pending — will be filled as evals complete.*
+*Filling as evals complete. Run started 2026-10-07.*
 
 ### T1b (100KB)
 
 | File | Type | BPB | B/s | Tokens | Delta vs 10KB |
 |---|---|---|---|---|---|
-| enwik8 | Text EN | — | — | — | — |
+| enwik8 | Text EN | **1.1852** | 107 | 25,085 | +0.0172 |
 | dickens | Text EN | — | — | — | — |
 | samba | Code | — | — | — | — |
 | mozilla | Binary | — | — | — | — |
