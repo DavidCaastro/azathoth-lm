@@ -237,6 +237,33 @@ components learn document patterns. Full enwik8 delta est. -0.07 to -0.10.
 At 162 B/s (Q8 + AVX-VNNI + scratch arena), full enwik8 ≈ 171h (~7 days).
 See R11 for Q8 quantization details, R14 for VNNI and scratch arena.
 
+### Throughput by Domain (measured T1/T2, 10KB, 2026-10-07)
+
+| Domain | Representative files | B/s |
+|---|---|---|
+| Text EN | dickens, webster, enwik8 | 114–133 |
+| Code | samba | 105 |
+| Structured | xml, nci | 48–58 |
+| Binary | mozilla, ooffice | 29–46 |
+| Numerical | OEIS | 40 |
+| High entropy | x-ray, sao, osdb | 29–36 |
+| **Weighted mean (all 12 Silesia + 5 T1)** | | **~62** |
+
+Note: throughput at 100KB is higher (~162 B/s on enwik8) due to L3 cache
+warmup and amortized initialization. The 62 B/s mean is conservative.
+
+### Eval Time Estimates (based on measured throughput)
+
+Computed from T1/T2 10KB B/s data (conservative, 62 B/s mean).
+100KB throughput is ~2-2.5x higher; optimistic estimates in parentheses.
+
+| Tier | Files | Total bytes | Est. conservative | Est. optimistic (100KB B/s) |
+|---|---|---|---|---|
+| **T1b** | 5 × 100KB | 500 KB | ~2.2 h | ~1.0 h |
+| **T2b** | 12 × 100KB | 1.2 MB | ~5.4 h | ~2.5 h |
+| **T3** | 11 × 100KB | 1.1 MB | ~4.9 h | ~2.2 h |
+| **All (T1b+T2b+T3)** | 28 files | **~2.8 MB** | **~12.5 h** | **~5.7 h** |
+
 ## Scaling Results (R05, 2026-10-02)
 
 | Model | BPB (10KB) | Status |
