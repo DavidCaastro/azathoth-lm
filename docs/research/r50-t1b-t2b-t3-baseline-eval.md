@@ -223,17 +223,24 @@ For comparison with 100KB results:
 
 ## Results
 
-*Filling as evals complete. Run started 2026-10-07.*
+*Run 1 (without --save-state) aborted after 2/25 files to restart with
+state serialization + metadata. Results below are from Run 1 partial.*
 
-### T1b (100KB)
+### T1b (100KB) — partial (Run 1, no --save-state)
 
-| File | Type | BPB | B/s | Tokens | Delta vs 10KB |
-|---|---|---|---|---|---|
-| enwik8 | Text EN | **1.1852** | 107 | 25,085 | +0.0172 |
-| dickens | Text EN | — | — | — | — |
-| samba | Code | — | — | — | — |
-| mozilla | Binary | — | — | — | — |
-| OEIS | Numerical | — | — | — | — |
+| File | Type | BPB | B/s | Tokens | bytes/tok | Time | Delta vs 10KB |
+|---|---|---|---|---|---|---|---|
+| enwik8 | Text EN | **1.1852** | 107 | 25,085 | 3.99 | 938.7s | +0.0172 |
+| OEIS | Numerical | **2.5353** | 54 | 64,022 | 1.56 | 1841.8s | **+0.6975** |
+| dickens | Text EN | — | — | — | — | running (aborted) | — |
+| samba | Code | — | — | — | — | — | — |
+| mozilla | Binary | — | — | — | — | — | — |
+
+**Key finding**: OEIS jumps from 1.8378 (10KB) to 2.5353 (100KB), delta +0.6975.
+At 10KB we were evaluating the structured header (sequence IDs, format metadata).
+At 100KB we enter the pure numerical payload where RWKV contributes almost nothing
+(1.56 bytes/token = near-maximal token density, each byte is its own token).
+This validates R48's header-bias hypothesis for numerical data.
 
 #### T1b Composite
 
