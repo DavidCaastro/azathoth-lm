@@ -97,9 +97,15 @@ Ver `docs/research/r28-composite-metric-debias.md` para justificacion.
 | Tier | Archivos | Tiempo | Cuando |
 |---|---|---|---|
 | Quick (T1) | enwik8 + dickens + samba + mozilla + OEIS (10KB c/u) | ~8 min | Per milestone |
-| Standard (T2) | enwik8 100KB + 12 Silesia (10KB c/u) | ~30 min | Per phase |
-| Modern (T3) | AIT DCC 2026 (A-H) + local modern (10KB c/u) | ~30 min | Per phase |
+| Quick-100K (T1b) | Mismos 5 archivos T1 (100KB c/u) | ~1h | Per phase |
+| Standard (T2) | 12 Silesia (10KB c/u) | ~30 min | Per phase |
+| Standard-100K (T2b) | Mismos 12 Silesia (100KB c/u) | ~5h | Per phase |
+| Modern (T3) | AIT DCC 2026 (A-H) + local modern (100KB c/u) | ~4h | Per phase |
 | Full (T4) | enwik8 100MB + Silesia full + adversarial | ~8+ dias | Per release |
+
+T1b/T2b corrigen sesgo de headers en archivos binarios (R48).
+T1/T2 10KB preservados para serie historica (18 experimentos).
+T3 nace a 100KB — sin historia que preservar.
 
 ### Metricas dashboard
 

@@ -193,7 +193,7 @@ Dynamic CM instantiation analyzed and found risky at current scale:
 | # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
 | ~~N1~~ | ~~Measure RWKV per-domain contribution~~ | **Diagnostic DONE** | ~~Low~~ | **R47.** RWKV helps all 14 files (5-61%). No bypass viable. Contribution: A=51%, B=51%, C=28%, D=12%. Refutes bypass, weakens N2 (see below). |
-| N3 | E8/E9 reversible transform (executables) | -0.01 to -0.05 | Med | Every sub-1.0 compressor uses this. Convert relative→absolute addresses. Improves ALL models on .exe data. Preprocessing: no mixer changes. |
+| ~~N3~~ | ~~E8/E9 reversible transform (executables)~~ | **ooffice -0.1811, mozilla +0.006** | ~~Med~~ | **DONE (R49).** Implemented and validated. Strong on code-dense binaries, neutral on text/data. T2 mean -0.0151 if unconditional. |
 | N4 | Delta coding (numerical data) | -0.01 to -0.03 | Med | Reduces entropy of sequential numeric data. Benefits OEIS cluster specifically. Preprocessing: no mixer changes. |
 | N6 | Full enwik8 100MB eval | -0.015 est. | Time | 8-13 days CPU. Validates whether mixer improvements (S2/S3) scale with data. Unblocks scale-dependent items (N5, APM). |
 | N5 | Specialized CM contexts (PixelModel, RecordModel) | -0.02 to -0.10 | High | Pre-blend into Group 1 to avoid mixer overhead. Addresses Cluster C/D root cause: CM lacks domain-specific hash functions. |

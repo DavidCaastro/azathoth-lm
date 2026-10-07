@@ -40,15 +40,63 @@ See `docs/research/r28-composite-metric-debias.md` for full justification.
 
 ### Eval Suite Tiers
 
-| Tier | Files | Time | When | Decision role |
-|---|---|---|---|---|
-| **T1 Quick** | enwik8 + dickens + samba + mozilla + OEIS (10KB each) | ~8 min | Per milestone | Accept/reject gate |
-| **T2 Standard** | enwik8 100KB + all 12 Silesia (10KB each) | ~30 min | Per phase | Full composite |
-| **T3 Modern** | AIT DCC 2026 (A-H) + local modern (10KB each) | ~30 min | Per phase | Modern morphology validation |
-| **T4 Full** | enwik8 100MB + Silesia full + adversarial + baselines | ~8+ days | Per release | Publication |
+| Tier | Files | Eval window | Time | When | Decision role |
+|---|---|---|---|---|---|
+| **T1** | enwik8 + dickens + samba + mozilla + OEIS | 10KB | ~8 min | Per milestone | Accept/reject gate |
+| **T1b** | Same 5 files as T1 | **100KB** | ~1h | Per phase | Header-bias correction (see below) |
+| **T2** | 12 Silesia files | 10KB | ~30 min | Per phase | Cross-domain composite |
+| **T2b** | Same 12 files as T2 | **100KB** | ~5h | Per phase | Header-bias correction (see below) |
+| **T3** | AIT DCC 2026 (A-H) + local modern (11 files) | **100KB** | ~4h | Per phase | Modern morphology validation |
+| **T4** | enwik8 100MB + Silesia full + adversarial + baselines | Full | ~8+ days | Per release | Publication |
 
 T1 covers four distinct data regimes (text, code, binary, numerical) with minimum time.
 T1 is the **mandatory** gate for every code change. No enwik8-only decisions.
+
+### Eval Window: 10KB vs 100KB (R48 finding)
+
+**Problem identified**: at 10KB, binary files (mozilla, ooffice, x-ray, sao, etc.)
+are evaluated primarily on file headers (ELF/PE section tables, metadata) rather
+than on actual payload content. This is because structured headers occupy the first
+few KB of most binary formats. Text files (enwik8, dickens, OEIS) are NOT affected
+— their byte 0 is already real content.
+
+**Impact**: BPB at 10KB for binary files may be optimistic (headers are structured
+and easy to compress) or pessimistic (cold start without context) — either way, it
+does not represent the file's true compression difficulty.
+
+**Solution**: two complementary eval windows, clearly differentiated.
+
+#### T1/T2 at 10KB (PRESERVED — historical baseline)
+
+- **Purpose**: regression testing with consistent historical series
+- **18 experiments** have been measured at 10KB. This is the only comparable
+  baseline across S1-S4, A1-A2, B1-B4, C1-C3, R33-R49
+- **Accept/reject decisions** continue to use T1 10KB composite
+- **Limitation acknowledged**: binary files evaluated mostly on headers
+- **NOT replaced, NOT deprecated** — these are the canonical numbers
+
+#### T1b/T2b at 100KB (NEW — header-bias correction)
+
+- **Purpose**: validate that T1/T2 results hold at a more representative scale
+- **Same files, same config, same methodology** — only the eval window changes
+- **100KB captures headers + substantial payload** for all file types
+- **NOT a decision gate** — supplementary data to cross-check T1/T2
+- **Reported alongside T1/T2**, clearly labeled as "100KB" variant
+- **Expected behavior**: text files should be similar; binary files may differ
+  significantly due to header-to-payload transition
+
+If T1b/T2b consistently diverge from T1/T2 (e.g., a change improves T1 but
+regresses T1b), that is a signal that the improvement is header-specific and
+does not generalize to payload content.
+
+#### T3 at 100KB (NEW — modern morphology, no history)
+
+- **Purpose**: evaluate on data types absent from Silesia (2003)
+- **100KB from the start** — no historical baseline to preserve
+- **Files**: AIT DCC 2026 A-H (peer-reviewed, hidden-test-validated) +
+  local modern data (x86-64 PE, SafeTensors ML weights, JSONL logs)
+- **Decision role**: informational — reveals blind spots in generalization
+- **See T3 section below for full file list and rationale**
 
 OEIS integer sequences (https://oeis.org/stripped.gz) added per R29: pure numerical
 data is a genuinely distinct regime — low Shannon entropy (3.5 bpB) but high
@@ -234,10 +282,12 @@ the best modern multi-domain reference. See R48 for full investigation.
 
 ### Eval Protocol
 
-- **Per file**: 10KB eval (first 10,000 bytes), same as T1/T2
+- **Per file**: 100KB eval (first 100,000 bytes) — see "Eval Window" section above
 - **Mode**: hybrid-eval (full stack: CM + RWKV + match + LSTM mixer + emb surgery)
 - **Metrics**: BPB, B/s, composite (mean, sigma, worst)
-- **Comparison**: T3 composite vs T1/T2 composite — are we better/worse on modern data?
+- **Comparison**: T3 composite vs T1b/T2b composite (all at 100KB for fair comparison)
+- **Files smaller than 100KB**: eval full file (e.g., modern-x64-pe at 543KB uses 100KB;
+  structured-jsonl at 10KB uses full 10KB)
 
 ### Anti-Gaming
 
