@@ -135,10 +135,6 @@ impl LstmExpert {
             + self.w_out.len() + self.b_out.len()
     }
 
-    pub fn memory_bytes(&self) -> usize {
-        self.param_count() * 4
-    }
-
     /// Get current byte prediction distribution.
     /// Call this before observe_byte() to get prediction for the next byte.
     pub fn predict_byte(&self) -> &[f32; EXPERT_VOCAB] {

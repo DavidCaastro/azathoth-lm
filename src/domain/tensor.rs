@@ -351,20 +351,6 @@ impl Q4Tensor {
         self.packed.len() + self.scales.len() * 4
     }
 
-    /// Dequantize a single element (for debugging)
-    #[allow(dead_code)]
-    fn get(&self, idx: usize) -> f32 {
-        let byte = self.packed[idx / 2];
-        let nibble = if idx % 2 == 0 { byte & 0x0F } else { byte >> 4 };
-        // Sign-extend from 4 bits
-        let val = if nibble & 0x08 != 0 {
-            nibble as i8 | !0x0F_u8 as i8 // sign extend
-        } else {
-            nibble as i8
-        };
-        let group = idx / self.group_size;
-        val as f32 * self.scales[group]
-    }
 }
 
 /// y = Q4_mat @ f32_vec.

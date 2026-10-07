@@ -8,3 +8,6 @@
 model.ckpt/
 *.jsonl
 *.log
+nul.*
+*.rcgu.o
+*.pdb

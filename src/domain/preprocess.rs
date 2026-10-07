@@ -13,6 +13,7 @@
 /// data.
 ///
 /// Returns a new Vec<u8> with the same length as input.
+#[cfg(test)]
 pub fn e8e9_encode(data: &[u8]) -> Vec<u8> {
     let mut out = data.to_vec();
     let n = out.len();
@@ -41,6 +42,7 @@ pub fn e8e9_encode(data: &[u8]) -> Vec<u8> {
 ///
 /// Exact inverse of e8e9_encode. For compression pipelines:
 /// encode before prediction, decode after decompression.
+#[cfg(test)]
 pub fn e8e9_decode(data: &[u8]) -> Vec<u8> {
     let mut out = data.to_vec();
     let n = out.len();
@@ -68,7 +70,6 @@ pub fn e8e9_decode(data: &[u8]) -> Vec<u8> {
 
 /// Statistics from E8/E9 transform application.
 pub struct E8E9Stats {
-    pub total_bytes: usize,
     pub e8_count: usize,
     pub e9_count: usize,
     pub transformed: usize,
@@ -80,7 +81,6 @@ pub fn e8e9_encode_with_stats(data: &[u8]) -> (Vec<u8>, E8E9Stats) {
     let mut out = data.to_vec();
     let n = out.len();
     let mut stats = E8E9Stats {
-        total_bytes: n,
         e8_count: 0,
         e9_count: 0,
         transformed: 0,
