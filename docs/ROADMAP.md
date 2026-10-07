@@ -1,7 +1,7 @@
 # Roadmap — azathoth-lm
 
-**Date**: 2026-10-06
-**Current best (enwik8)**: 1.1843 BPB (100KB, literature ref only)
+**Date**: 2026-10-07
+**Current best (enwik8)**: 1.1852 BPB (100KB, literature ref only)
 **Current composite (T1)**: mean=1.5213 | sigma=0.2814 | worst=1.9045 (5 files, with surgery)
 **Current composite (T2)**: mean=2.2799 | sigma=1.6843 | worst=6.0483 (12 Silesia files, post-Tier A + surgery)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
@@ -38,18 +38,19 @@ Gap to target: ~0.18 BPB. Below NNCP (1.19), below PAQ8px.
 ```
 Input bytes
     ├─→ Tokenizer → RWKV-7 0.1B Q8 → TokenByteTrie → bit preds (Group 2)
-    ├─→ CM orders 0-2 → logistic sub-mixer → Group 0 (short ctx)
-    ├─→ CM orders 3-8 + sparse + ICM → logistic sub-mixer → Group 1 (long ctx)
+    ├─→ CM orders 0-2 + word → logistic sub-mixer → Group 0 (short ctx)
+    ├─→ CM orders 3-8 + sparse + ICM + word → logistic sub-mixer → Group 1 (long ctx)
     ├─→ MatchModel (ctx 4-128) → bit preds (Group 3: match)
-    └──────────── Top LSTM (H=128, 67K params, BPTT=1) → final P(bit=1)
+    └──────────── Top LSTM (H=128, 51K params, BPTT=8, coupled, LN, Adam) → final P(bit=1)
 ```
 
-### Key Gap vs Competition (R34 finding)
+### Key Gap vs Competition (R34 + Tier A/B findings)
 
-The #1 architectural deficit is NOT model count — it is **LSTM mixer depth**.
-cmix uses BPTT=100 + Adam + LayerNorm + coupled gates. Our BPTT=1 makes the
-LSTM essentially a feedforward net with persistent state. Closing this gap
-is the highest-impact single action.
+The LSTM mixer gap (R34) has been **partially closed**: coupled gates, LayerNorm,
+BPTT=8, Adam optimizer are all implemented (S1-S3). Remaining gap vs cmix is
+primarily **data scale** (100KB vs 100MB) and **byte-level BPTT** (cmix: 100 bytes
+= 800 bits, ours: 8 bits). All incremental improvements (Tier A+B) tested and
+found neutral at 100KB — architecture is at a local minimum at this scale.
 
 ### Composite Baseline (Tier 1, 10KB each, with emb surgery center0.3)
 

@@ -12,9 +12,9 @@ Composite BPB: mean=2.2799 | sigma=1.6843 | worst=6.0483 (sao)
   Binary mean:     3.4278 (6 files)
 ```
 
-Post-Tier A config: 14 CM models (incl. 2 word), BPTT=8 LSTM, APM disabled.
-WordModels add +12 MB but are neutral/slightly dilutive on most files.
-vs pre-S1: mean -0.0657, sigma -0.0426 (still improved overall).
+Post-Tier S+A+B config: 14 CM models (incl. 2 word), BPTT=8 LSTM, APM disabled.
+Tier B tested and killed: BPTT 16-32, orders 12/16, 2-layer LSTM, ISSE — all neutral.
+Architecture at local minimum at 100KB scale. Only S2+S3 provided real gains.
 
 ### Acceptance Rule
 
