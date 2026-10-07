@@ -192,24 +192,48 @@ Dynamic CM instantiation analyzed and found risky at current scale:
 
 | # | Action | Est. Delta | Effort | Rationale |
 |---|---|---|---|---|
-| ~~N1~~ | ~~Measure RWKV per-domain contribution~~ | **Diagnostic DONE** | ~~Low~~ | **R47.** RWKV helps all 14 files (5-61%). No bypass viable. Contribution: A=51%, B=51%, C=28%, D=12%. Confirms N2 (entropy signals) as next step. |
-| N2 | Entropy signals as mixer input | -0.005 to -0.02 | Low | Feed rolling entropy + ASCII ratio + match HR to LSTM. Free information for implicit routing. Validated by MoE-LC (WWW 2026). |
-| N3 | E8/E9 reversible transform (executables) | -0.01 to -0.05 | Med | Every sub-1.0 compressor uses this. Convert relative→absolute addresses. Improves ALL models on .exe data. |
-| N4 | Delta coding (numerical data) | -0.01 to -0.03 | Med | Reduces entropy of sequential numeric data. Benefits OEIS cluster specifically. |
-| N5 | Specialized CM contexts (PixelModel, RecordModel) | -0.02 to -0.10 | High | Pre-blend into Group 1 to avoid mixer overhead. Addresses Cluster C/D root cause: CM lacks domain-specific hash functions. |
+| ~~N1~~ | ~~Measure RWKV per-domain contribution~~ | **Diagnostic DONE** | ~~Low~~ | **R47.** RWKV helps all 14 files (5-61%). No bypass viable. Contribution: A=51%, B=51%, C=28%, D=12%. Refutes bypass, weakens N2 (see below). |
+| N3 | E8/E9 reversible transform (executables) | -0.01 to -0.05 | Med | Every sub-1.0 compressor uses this. Convert relative→absolute addresses. Improves ALL models on .exe data. Preprocessing: no mixer changes. |
+| N4 | Delta coding (numerical data) | -0.01 to -0.03 | Med | Reduces entropy of sequential numeric data. Benefits OEIS cluster specifically. Preprocessing: no mixer changes. |
 | N6 | Full enwik8 100MB eval | -0.015 est. | Time | 8-13 days CPU. Validates whether mixer improvements (S2/S3) scale with data. Unblocks scale-dependent items (N5, APM). |
+| N5 | Specialized CM contexts (PixelModel, RecordModel) | -0.02 to -0.10 | High | Pre-blend into Group 1 to avoid mixer overhead. Addresses Cluster C/D root cause: CM lacks domain-specific hash functions. |
+| ~~N2~~ | ~~Entropy signals as mixer input~~ | ~~-0.005 to -0.02~~ | ~~Low~~ | **DEMOTED (post-R47).** See "N2 demotion rationale" below. |
 
-Priority order: N1 → N2 → N6 → N3 → N4 → N5.
-N1-N2 are diagnostic/low-risk. N6 is the gate for scale-dependent improvements.
-N3-N4 are proven in ecosystem. N5 is the highest-impact but highest-risk.
+Priority order: N3 → N4 → N6 → N5 → N2.
+N3-N4 are preprocessing (proven in ecosystem, zero mixer risk).
+N6 is the scale gate. N5 is highest-impact but highest-risk.
+N2 demoted: mixer input overhead pattern + R47 weakened justification.
+
+#### N2 demotion rationale (post-R47)
+
+N2 was originally prioritized as "low risk, MoE-LC validated" based on the
+hypothesis that the LSTM mixer lacked regime knowledge. R47 weakened this
+in two ways:
+
+1. **The mixer already knows.** RWKV contributes positively on ALL 14 files
+   (5-61%). The mixer never needs to "turn off" RWKV — it already infers
+   relative model quality from the predictions it receives. The 51%→28%→12%
+   gradient is real but implicit adaptation is already handling it.
+
+2. **Mixer input overhead kills at 100KB.** Adding entropy signals = new
+   inputs to the LSTM. This is the same pattern that killed A2 (+0.013),
+   C1 (+0.0127), and S4-in-own-group (+0.013). Every extra LSTM input at
+   100KB scale creates parameter overhead that exceeds information gain.
+
+N2 could survive in a modified form (e.g., LR modulation, logistic sub-mixer
+bias) that avoids adding LSTM inputs, but that is a fundamentally different
+experiment. Deprioritized in favor of preprocessing transforms (N3/N4) which
+improve BOTH models without touching the mixer — the only approach family
+that has never been killed.
 
 ### Path forward
 
 ```
-1.1852  current (post Tier S+A+B+C)
-1.17    + N2 entropy signals + N6 full enwik8 convergence (est. -0.015)
-1.14    + N3/N4 preprocessing transforms (est. -0.03)
-1.10    + N5 specialized CM contexts (est. -0.04, speculative)
+1.1852  current (post Tier S+A+B+C+N1)
+1.16    + N3 E8/E9 transform (est. -0.02, mozilla/ooffice)
+1.14    + N4 delta coding (est. -0.02, oeis/osdb)
+1.12    + N6 full enwik8 convergence (est. -0.015)
+1.08    + N5 specialized CM contexts (est. -0.04, speculative)
 1.05    CPU ceiling (optimistic, requires all of above)
 <1.0    requires domain-tuned neural model (GPU) or OmniZip-style MoE in RWKV
 ```
