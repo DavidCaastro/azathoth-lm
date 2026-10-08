@@ -1,9 +1,10 @@
 # Roadmap — azathoth-lm
 
-**Date**: 2026-10-07
+**Date**: 2026-10-08
 **Current best (enwik8)**: 1.1852 BPB (100KB, literature ref only)
-**Current composite (T1)**: mean=1.4674 | sigma=0.3030 | worst=1.8378 (5 files, FINAL post-all-tiers)
-**Current composite (T2)**: mean=2.2799 | sigma=1.6843 | worst=6.0483 (12 Silesia files, FINAL post-all-tiers)
+**Current composite (T1b, 100KB)**: enwik8=1.1852, OEIS=2.5353
+**Current composite (T2b, 100KB)**: mean=1.8814 | sigma=1.4825 | worst=5.2470 (12 Silesia files)
+**Current composite (T3, 100KB)**: mean=3.3788 | sigma=2.5716 | worst=7.9891 (11 modern files)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
 **Primary metric**: Composite BPB (mean, sigma, worst) — see R28
 
@@ -188,55 +189,56 @@ Dynamic CM instantiation analyzed and found risky at current scale:
 - Adding/removing groups destabilizes mixer convergence (same pattern as R44)
 - Only viable with self-gating + minimum observation threshold + >1MB data
 
-### Tier N — New directions (R46, post-analysis)
+### R51 — Organic Architecture Reform (replaces Tier N)
 
-| # | Action | Est. Delta | Effort | Rationale |
+R50 (25-file, 100KB baselines) + ecosystem research (2024-2026) revealed that
+our gap vs SOTA is **integration, not models**:
+- BPTT=8 bits vs cmix's 128 (16x gap)
+- Mixer blind to actual bytes (only sees 4 group logits)
+- No post-correction (Tweedie denoising proven in Midicoth)
+
+**The old Tier N items (N4, N5, N6) are subsumed by R51's phased organic reform.**
+See `docs/research/r51-organic-architecture-reform.md` for full analysis,
+mathematical validation (3x verified per layer), and 11 research sources.
+
+| Phase | Action | Est. Delta | Risk | Rationale |
 |---|---|---|---|---|
-| ~~N1~~ | ~~Measure RWKV per-domain contribution~~ | **Diagnostic DONE** | ~~Low~~ | **R47.** RWKV helps all 14 files (5-61%). No bypass viable. Contribution: A=51%, B=51%, C=28%, D=12%. Refutes bypass, weakens N2 (see below). |
-| ~~N3~~ | ~~E8/E9 reversible transform (executables)~~ | **ooffice -0.1811, mozilla +0.006** | ~~Med~~ | **DONE (R49).** Implemented and validated. Strong on code-dense binaries, neutral on text/data. T2 mean -0.0151 if unconditional. |
-| N4 | Delta coding (numerical data) | -0.01 to -0.03 | Med | Reduces entropy of sequential numeric data. Benefits OEIS cluster specifically. Preprocessing: no mixer changes. |
-| N6 | Full enwik8 100MB eval | -0.015 est. | Time | 8-13 days CPU. Validates whether mixer improvements (S2/S3) scale with data. Unblocks scale-dependent items (N5, APM). |
-| N5 | Specialized CM contexts (PixelModel, RecordModel) | -0.02 to -0.10 | High | Pre-blend into Group 1 to avoid mixer overhead. Addresses Cluster C/D root cause: CM lacks domain-specific hash functions. |
-| ~~N2~~ | ~~Entropy signals as mixer input~~ | ~~-0.005 to -0.02~~ | ~~Low~~ | **DEMOTED (post-R47).** See "N2 demotion rationale" below. |
+| **0** | **Adaptive preprocessing** (delta + byte-plane split) | OEIS -0.3/-0.7, ait-E -2.0/-4.0 | None | AIT DCC G2-V3 proven. Transparent to mixer. Subsumes N4. |
+| **1** | **Byte-context LSTM** (44 floats, BPTT=64) + WHT features | -0.01/-0.03 text, -0.05 binary | Low | cmix/RATA-CMIX standard. Structurally different from killed B2 (enriched input, not just more steps). |
+| **2** | **Tweedie post-correction** (2048 buckets, 24 KB) | -0.01/-0.03, Cluster C/D | Low | Midicoth proven. Math-guaranteed (Stein dominance). Not SSE (no cascade, no separate LR). |
+| **3** | **uSSM byte-level** (D=32, L=2, ~50K params) pre-blend with RWKV | neutral text, -0.1/-0.3 binary >1MB | Medium | StateSMix 2.123 BPB from scratch. Pre-blended in Group 2 (no new mixer group). |
+| **4** | **CM order-chain + rank encoding** | -0.01/-0.05 | Experimental | Chained Neural 2026 + MTF. Independent sub-features. |
 
-Priority order: N3 → N4 → N6 → N5 → N2.
-N3-N4 are preprocessing (proven in ecosystem, zero mixer risk).
-N6 is the scale gate. N5 is highest-impact but highest-risk.
-N2 demoted: mixer input overhead pattern + R47 weakened justification.
+**Unexplored edges** (E1-E6): byte-plane split, WHT feature expansion,
+CM information inheritance, rank-based encoding, RWKV→uSSM self-distillation,
+prediction horizon adaptation. Details in R51.
 
-#### N2 demotion rationale (post-R47)
+**Validation gate per phase** (R28): mean DOWN + sigma SAME/DOWN + worst not UP >0.05.
+Phases are independent — failure of one does not block others.
 
-N2 was originally prioritized as "low risk, MoE-LC validated" based on the
-hypothesis that the LSTM mixer lacked regime knowledge. R47 weakened this
-in two ways:
-
-1. **The mixer already knows.** RWKV contributes positively on ALL 14 files
-   (5-61%). The mixer never needs to "turn off" RWKV — it already infers
-   relative model quality from the predictions it receives. The 51%→28%→12%
-   gradient is real but implicit adaptation is already handling it.
-
-2. **Mixer input overhead kills at 100KB.** Adding entropy signals = new
-   inputs to the LSTM. This is the same pattern that killed A2 (+0.013),
-   C1 (+0.0127), and S4-in-own-group (+0.013). Every extra LSTM input at
-   100KB scale creates parameter overhead that exceeds information gain.
-
-N2 could survive in a modified form (e.g., LR modulation, logistic sub-mixer
-bias) that avoids adding LSTM inputs, but that is a fundamentally different
-experiment. Deprioritized in favor of preprocessing transforms (N3/N4) which
-improve BOTH models without touching the mixer — the only approach family
-that has never been killed.
-
-### Path forward
+### Projected path forward
 
 ```
-1.1852  current (post Tier S+A+B+C+N1)
-1.16    + N3 E8/E9 transform (est. -0.02, mozilla/ooffice)
-1.14    + N4 delta coding (est. -0.02, oeis/osdb)
-1.12    + N6 full enwik8 convergence (est. -0.015)
-1.08    + N5 specialized CM contexts (est. -0.04, speculative)
-1.05    CPU ceiling (optimistic, requires all of above)
-<1.0    requires domain-tuned neural model (GPU) or OmniZip-style MoE in RWKV
+1.1852  current (post all optimization series + R50 baselines)
+1.1852  + Phase 0 (preprocessing — neutral on enwik8, T2b -0.13)
+1.17    + Phase 1 (byte-context LSTM, BPTT=64)
+1.16    + Phase 2 (Tweedie post-correction)
+1.15    + Phase 3 (uSSM byte-level, binary improvement)
+1.14    + Phase 4 (CM inheritance + rank encoding)
+~1.14   CPU ceiling (enwik8), T2b ~1.50
+<1.0    requires domain-tuned neural model (GPU)
 ```
+
+### Legacy: Tier N items (superseded by R51)
+
+| Old # | Status | Disposition |
+|---|---|---|
+| N1 | DONE (R47) | RWKV helps all 14 files. Diagnostic complete. |
+| N2 | DEMOTED | Mixer input overhead pattern. Subsumed by R51 Phase 1 (byte context). |
+| N3 | DONE (R49) | E8/E9 implemented. ooffice -0.18. |
+| N4 | → R51 Phase 0 | Delta coding subsumed by adaptive preprocessing. |
+| N5 | → R51 Phase 3/4 | Specialized CM subsumed by uSSM + CM order-chain. |
+| N6 | Deferred | Full enwik8 100MB eval (8-29 days). Scale validation after R51 phases. |
 
 ## Constraints
 

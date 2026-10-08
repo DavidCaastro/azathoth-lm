@@ -70,30 +70,33 @@ esta vez seria diferente.
 
 ## Tecnicas no portadas (auditoria de conocimientos)
 
+> **R51 reformulo el roadmap.** Items marcados con → R51 fueron absorbidos
+> por la reforma organica. Ver `docs/research/r51-organic-architecture-reform.md`.
+
 ### Tier 1 — Alto impacto estimado
 - **RunMap per context** (R22): segundo estimador por contexto, est. -0.03 a -0.06 BPB
-- **BPTT training-only flag**: desactivar backward durante eval para desbloquear BPTT>1
+- ~~**BPTT training-only flag**~~: → R51 Phase 1 (BPTT=64 con byte context resuelve esto)
 - **Cascaded GLN pre-groups** (R22): GLN como pre-mixer antes de LSTM (no reemplazando)
 - **SA-PPM / suffix array** (R17): paradigma unificado suffix-based, est. -0.30 a -0.60
-- **Byte-level LSTM** (R22): BPTT=40 (40 bytes) vs actual BPTT=8 (1 byte) — gap critico vs cmix
+- ~~**Byte-level LSTM**~~ (R22): → **R51 Phase 1** (BPTT=64 bits = 8 bytes + 44-float enriched input)
 - **CTW adaptive depth**: Context Tree Weighting con profundidad adaptativa
 
 ### Tier 2 — Tecnicas de ecosistema
 - **Logit-bias mixing**: mezclar logits en lugar de probabilidades (AIT 2026)
-- **Micro-diffusion denoising**: refinamiento iterativo de predicciones
-- **Confidence skip**: saltar modelos cuando confianza alta (ahorro de compute)
+- ~~**Micro-diffusion denoising**~~: → **R51 Phase 2** (Tweedie post-correction, Midicoth)
+- ~~**Confidence skip**~~: KILLED (R44, P1.4). RWKV=97% compute, no skippable.
 - **Geometric byte-level mixing**: ponderacion geometrica entre predictores
 
 ### Tier 3 — Tecnicas granulares
-- **Diverse SSE contexts** (R22): +2 SSE stages con contextos variados, est. -0.02 a -0.04
+- ~~**Diverse SSE contexts**~~ (R22): → R51 Phase 2 (Tweedie reemplaza SSE sin feedback loops)
 - **Sparse word contexts** (R22): (w0,w2), (w0,w3), est. -0.02 a -0.03
 - **Composite hashes**: combinar hash de match length + recency + position
 - **MatchTrust register**: confianza acumulada por modelo de match
-- **Cross-feature combinations**: cruzar outputs de modelos de familias distintas
+- ~~**Cross-feature combinations**~~: → **R51 Phase 1** (WHT feature expansion, arista E2)
 
-### Tier 4 — Diagnosticos
-- **Per-bit cost breakdown**: bits 3-5 cuestan 150-180% (identidad de caracter = cuello de botella)
-- **Hierarchical mixer by model type**: agrupar modelos por familia antes de LSTM
+### Tier 4 — Diagnosticos (DONE — informaron R50/R51)
+- ~~**Per-bit cost breakdown**~~: DONE (R50). bits 3-5 = 63-68% del costo en texto.
+- ~~**Hierarchical mixer by model type**~~: DONE (Phase 2, P2.2). Ya implementado.
 
 ### Tier 5 — Eficiencia
 - **Circular buffer optimization**: ahorro estimado 92 MB en hash tables
@@ -101,6 +104,7 @@ esta vez seria diferente.
 
 ### Tier 6 — Root causes documentados
 - **Why SSE overcorrects**: reuso de contextos entre stages causa feedback loop
+  → R51 Phase 2 (Tweedie) resuelve esto sin cascading
 - **Why LZ match fails at bit-level**: bit-alignment destruye match boundaries
 - **Linear mixer ceiling**: provado que lineal no captura interacciones entre modelos
 
@@ -108,6 +112,14 @@ esta vez seria diferente.
 - **Adaptive LR (RLS vs LMS)**: RLS converge mas rapido pero O(n^2); LMS suficiente online
 - **Position-dependent entropy**: entropia varia por posicion dentro de byte (bits 0-1 baratos, 3-5 caros)
 - **Fixed Share algorithm**: algoritmo de tracking optimo para non-stationary sources
+
+### R51 — Items nuevos (no heredados, descubiertos por investigacion 2024-2026)
+- **uSSM byte-level** (StateSMix/MambaByte): → R51 Phase 3
+- **Adaptive preprocessing** (AIT DCC G2-V3): → R51 Phase 0
+- **CM order-chain** (Chained Neural 2026): → R51 Phase 4, arista E3
+- **Rank-based encoding** (MTF sin BWT): → R51 Phase 4, arista E4
+- **Self-distillation RWKV→uSSM**: → R51 Phase 3, arista E5 (innovacion propia)
+- **Prediction horizon adaptation** (BLT 2025): → R51 arista E6
 
 ## De edge-lm — Insights adicionales
 - **Analytical weights (SVD/PPMI)**: 90% de los pesos son computables sin backprop

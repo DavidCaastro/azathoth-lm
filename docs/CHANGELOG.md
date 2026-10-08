@@ -235,6 +235,107 @@ Projected                           Actual
 
 ---
 
+## Optimization Series (2026-10-06 to 2026-10-07)
+
+### S1: Coupled Gates (R35)
+
+- **Result**: 1.1955 BPB (+0.0033 neutral), -25% params, +15% speed
+- i_gate = 1 - f_gate. Prerequisite for S2/S3.
+
+### S2: LayerNorm (R36)
+
+- **Result**: 1.1898 BPB (-0.0057), +768 params (+1.5%)
+- Strong early learning boost. Prerequisite for S3.
+
+### S3: BPTT=8 (R37)
+
+- **Result**: 1.1843 BPB (-0.0055 vs S2). New best.
+- Adam(beta1=0.02, beta2=0.9999). First temporal learning. 148 B/s.
+
+### S4: WordModel (R38)
+
+- **Result**: 1.1852 BPB (+0.0009 neutral). Kept for diversity.
+- Redundant with RWKV word-level knowledge. +12 MB.
+
+### R27: Embedding Surgery center0.3
+
+- **Result**: 1.1895 BPB (-0.0282), zero runtime cost
+- Blend byte embeddings toward global centroid. Universal.
+
+### R49: E8/E9 Transform
+
+- **Result**: ooffice -0.1811, mozilla +0.006, text neutral. T2 mean -0.0151.
+- Byte transform for x86 executables. Preprocessing works.
+
+---
+
+## Tier Experiments (A/B/C series, 2026-10-06 to 2026-10-07) — ALL KILLED
+
+| Experiment | Result | Root cause |
+|---|---|---|
+| A1 APM/SSE (R39) | +0.10 to +0.19 | LSTM well-calibrated, APM too sparse at 100KB |
+| A2 Match multi-input (R40) | +0.013 | Mixer group overhead pattern |
+| B1 2-layer LSTM (R43) | +0.0014 (2×128) | Early boost only, regresses at 100KB |
+| B2 BPTT scaling 16/32 bits (R41) | +0.0000/+0.0020 | Bit-level ceiling — same info processed more |
+| B3 ISSE chains | KILLED by analogy | Same family as A1 (SSE), same scale problems |
+| B4 Higher-order CM 12/16 (R42) | +0.0004 | Redundant with RWKV |
+| C1 Online LSTM expert (R44) | +0.0127 | Mixer group overhead > prediction value |
+| C2 Information inheritance | KILLED by analysis | Redundant with hierarchical mixer |
+| C3 Modality-routing | KILLED by analysis | Violates no-domain-detection rule |
+
+---
+
+## Analysis & Baselines (2026-10-07 to 2026-10-08)
+
+### R45: T2 Final Silesia (12 files, 10KB)
+
+- **Result**: mean=2.2799, sigma=1.6843, worst=6.0483 (sao)
+- Architecture at hard local minimum at 100KB scale.
+- 17 experiments, only S2 (-0.0057) and S3 (-0.0055) improved BPB.
+
+### R46: Domain Analysis + MoE Feasibility
+
+- Identified 4 domain clusters (A/B/C/D) and 3 driving factors.
+- Tokenization (40%) + entropy (35%) + RWKV alignment (25%).
+- Context mixing IS soft MoE — gap vs cmix is scale + preprocessing.
+
+### R47: RWKV Per-Domain Contribution
+
+- RWKV helps all 14 files (5-61%). No bypass viable.
+- Contribution by cluster: A=51%, B=51%, C=28%, D=12%.
+
+### R48: Benchmark Corpus Investigation
+
+- Silesia (2003) morphologically outdated for modern data.
+- AIT DCC 2026 = best modern alternative. T3 eval suite designed.
+- T1b/T2b (100KB) correct header-bias in binary files.
+
+### R50: T1b/T2b/T3 Baselines (25 files, 100KB)
+
+- **T1b**: enwik8=1.1852, OEIS=2.5353
+- **T2b**: mean=1.8814, sigma=1.4825, worst=5.2470 (sao)
+- **T3**: mean=3.3788, sigma=2.5716, worst=7.9891 (ait-D)
+- 12.1h total. State files saved (AZ02 format, ~130 MB each).
+- 3D position matrix: X=B/Tok, Y=BPB, Z=bits3-5%. Three zones identified.
+- Key: B/Tok~1.0 cliff, T3 is 1.8x harder than T2b.
+
+### R51: Organic Architecture Reform
+
+- **Status**: Proposal approved, pending implementation.
+- Central finding: gap vs SOTA is integration, not models.
+  BPTT=8 vs 128 (16x gap), mixer blind to bytes, no post-correction.
+- 3-layer organic solution + adaptive preprocessing:
+  - Phase 0: Delta + byte-plane split (0 risk)
+  - Phase 1: Byte-context LSTM, BPTT=64, 44-float input (low risk)
+  - Phase 2: Tweedie post-correction, 24KB (low risk, math-guaranteed)
+  - Phase 3: uSSM byte-level D=32 L=2, pre-blend with RWKV (medium risk)
+  - Phase 4: CM order-chain + rank encoding (experimental)
+- 6 unexplored edges (E1-E6) from bias analysis.
+- Target: enwik8 ~1.14, T2b mean ~1.50.
+- Backed by 11 sources (2024-2026 ecosystem research).
+
+---
+
 ## Killed Approaches (full list)
 
 | Approach | Result | Root cause |
@@ -249,3 +350,9 @@ Projected                           Actual
 | AVX-VNNI pre-scratch | -33% speed | Memory-bound (cache pollution) |
 | All alt number systems | Various | See R14 |
 | Confidence skip (P1.4) | <3% speed, +0.0026 BPB | RWKV=97% compute, can't skip |
+| A1 APM/SSE (R39) | +0.10 to +0.19 | LSTM well-calibrated, APM sparse at 100KB |
+| A2 Match multi-input (R40) | +0.013 | Mixer group overhead pattern |
+| B1 2-layer LSTM (R43) | +0.0014 | Early boost only, regresses at 100KB |
+| B2 BPTT=16/32 bits (R41) | +0.0000/+0.0020 | Bit-level ceiling, same info |
+| B4 Higher-order CM (R42) | +0.0004 | Redundant with RWKV |
+| C1 Online LSTM expert (R44) | +0.0127 | Mixer group overhead > prediction value |
