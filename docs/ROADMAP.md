@@ -161,6 +161,7 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | R52 | Adaptive preprocessing (Phase 0) | KILLED: +4.13 mozilla. Incompatible with RWKV. | **KILLED** |
 | R53 | Byte-context LSTM (Phase 1) | -0.0033 enwik8 100KB. T1 composite PASS (all 3 ↓). | **DONE** |
 | R54 | Tweedie post-correction (Phase 2) | KILLED: +0.0293 (shrinkage), +0.0789 (calibration). Interferes with mixer. | **KILLED** |
+| R55 | Neural blend (Phase 3) | T1 mean -0.0221, binary -0.0096. Expert pre-blend with RWKV, no new group. | **DONE** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
@@ -211,7 +212,7 @@ mathematical validation (3x verified per layer), and 11 research sources.
 | ~~**0**~~ | ~~Adaptive preprocessing (delta + byte-plane split)~~ | **KILLED (R52)** | — | Transforms destroy RWKV predictions. Incompatible with pre-trained models. |
 | **1** | **Byte-context LSTM** (44 floats, BPTT=64) | **CONFIRMED (R53)** | Low | T1 composite gate PASS: mean -0.0016, sigma -0.0353, worst -0.0178. All 3 ↓. |
 | ~~**2**~~ | ~~Tweedie post-correction~~ (2048 buckets, 24 KB) | **KILLED (R54)** | — | Both shrinkage and calibration regress. Second adaptation loop interferes with mixer's online learning. Same root cause as SSE. |
-| **3** | **uSSM byte-level** (D=32, L=2, ~50K params) pre-blend with RWKV | neutral text, -0.1/-0.3 binary >1MB | Medium | StateSMix 2.123 BPB from scratch. Pre-blended in Group 2 (no new mixer group). |
+| **3** | **Neural blend** (44K expert pre-blend with RWKV) | **CONFIRMED (R55)** | Low | T1 composite PASS: mean -0.0221, sigma -0.0005, worst +0.0015. Binary -0.0096. |
 | **4** | **CM order-chain + rank encoding** | -0.01/-0.05 | Experimental | Chained Neural 2026 + MTF. Independent sub-features. |
 
 **Unexplored edges** (E1-E6): byte-plane split, WHT feature expansion,
@@ -228,7 +229,7 @@ Phases are independent — failure of one does not block others.
 1.1810  ✓ Phase 1 CONFIRMED (byte-context LSTM, BPTT=64) — R53
   ----  ✗ Phase 0 KILLED (preprocessing incompatible with RWKV) — R52
   ----  ✗ Phase 2 KILLED (post-correction fights adaptive mixer) — R54
-1.17    + Phase 3 (uSSM byte-level, binary improvement)
+1.1666  ✓ Phase 3 CONFIRMED (neural blend, -0.0096 binary) — R55
 1.16    + Phase 4 (CM inheritance + rank encoding)
 ~1.15   CPU ceiling (enwik8), T2b ~1.50
 <1.0    requires domain-tuned neural model (GPU)

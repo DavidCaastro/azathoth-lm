@@ -397,6 +397,25 @@ Projected                           Actual
 - **Code deleted**: Module removed (zero dead code policy).
 - See `docs/research/r54-phase2-tweedie-postcorrection.md`.
 
+### R55: Phase 3 — Neural Blend — CONFIRMED
+
+- **Approach**: Reuse existing LstmExpert (44K params) but BLEND its byte
+  predictions with RWKV at probability level before the mixer. Adaptive alpha
+  (sigmoid gate) degrades gracefully: alpha→1.0 when expert is bad.
+- **Key difference from R44 (KILLED)**: R44 added expert as separate mixer group
+  (overhead) or in shared group (contamination). R55 blends at byte level — mixer
+  sees identical Group 2 shape, zero new parameters.
+- **T1 Composite Gate (10KB, 5 files)**:
+  - mean: 1.4437 (-0.0221) — **DOWN**
+  - sigma: 0.2672 (-0.0005) — **DOWN**
+  - worst: 1.8215 (+0.0015) — **OK** (< 0.05)
+  - **All three criteria satisfied — PASS.**
+- **Per-domain**: enwik8 unchanged (alpha≈0.99), mozilla -0.0096 (expert helps binary),
+  dickens -0.0008, samba -0.0016, OEIS +0.0015 (noise).
+- **CLI**: `--neural-blend` flag, `--blend-lr F` (default 0.005).
+- **Throughput**: negligible impact (expert ~0.1% of RWKV cost).
+- See `docs/research/r55-phase3-neural-blend.md`.
+
 ### CLI Defaults Change
 
 - `--hierarchical`, `--match`, `--emb-surgery center0.3` now ON by default.
@@ -430,3 +449,4 @@ Projected                           Actual
 | C1 Online LSTM expert (R44) | +0.0127 | Mixer group overhead > prediction value |
 | R52 Adaptive preprocessing | +4.13 mozilla | Transforms destroy RWKV pre-trained predictions |
 | R54 Tweedie post-correction | +0.0293 to +0.0789 | Second adaptation loop fights mixer's online learning |
+| R55 Neural blend (Phase 3) | **-0.0221 mean** | **CONFIRMED: expert pre-blend with RWKV, T1 composite PASS** |

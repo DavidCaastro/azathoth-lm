@@ -44,7 +44,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N] [--e8e9]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--no-hierarchical] [--no-match] [--no-emb-surgery] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--expert] [--expert-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--no-hierarchical] [--no-match] [--no-emb-surgery] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--expert] [--expert-lr F] [--neural-blend] [--blend-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -405,6 +405,8 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut use_match = true;
     let mut use_expert = false;
     let mut expert_lr: f32 = 0.01;
+    let mut neural_blend = false;
+    let mut blend_lr: f32 = 0.005;
     let mut lstm_hidden: usize = 128;
     let mut lstm_lr: f32 = 0.002;
     let mut lstm_layers: usize = 1;
@@ -429,6 +431,8 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--no-emb-surgery" => { emb_surgery = None; }
             "--expert" => { use_expert = true; }
             "--expert-lr" => { i += 1; expert_lr = args[i].parse().unwrap(); use_expert = true; }
+            "--neural-blend" => { neural_blend = true; }
+            "--blend-lr" => { i += 1; blend_lr = args[i].parse().unwrap(); neural_blend = true; }
             "--lstm-hidden" => { i += 1; lstm_hidden = args[i].parse().unwrap(); use_lstm = true; }
             "--lstm-lr" => { i += 1; lstm_lr = args[i].parse().unwrap(); use_lstm = true; }
             "--lstm-layers" => { i += 1; lstm_layers = args[i].parse().unwrap(); }
@@ -534,11 +538,16 @@ fn cmd_hybrid_eval(args: &[String]) {
     let expert_str = if let Some(ref e) = expert {
         format!(" | expert: {}params, lr={}", e.param_count(), expert_lr)
     } else { String::new() };
-    eprintln!("[hybrid] CM: {} models, {:.1} MB | mixer: {} | trie: {} nodes{}{}",
+    let mut blend_expert = if neural_blend { Some(LstmExpert::new(expert_lr)) } else { None };
+    let mut blend_logit: f32 = 4.6; // sigmoid(4.6) ≈ 0.99 → almost pure RWKV initially
+    let blend_str = if let Some(ref be) = blend_expert {
+        format!(" | blend: {}params, blend_lr={}", be.param_count(), blend_lr)
+    } else { String::new() };
+    eprintln!("[hybrid] CM: {} models, {:.1} MB | mixer: {} | trie: {} nodes{}{}{}",
               cm.n_models(),
               cm_mem_mb, mixer_str, bridge.node_count(),
               if use_match { format!(" | match: {:.1} MB", match_mem_mb) } else { String::new() },
-              expert_str);
+              expert_str, blend_str);
 
     let mut logger = log_path.as_ref().map(|p| HybridLogger::new(p, total_bytes));
 
@@ -602,6 +611,9 @@ fn cmd_hybrid_eval(args: &[String]) {
                     if let Some(ref mut mm) = match_model {
                         mm.observe(byte);
                     }
+                    if let Some(ref mut be) = blend_expert {
+                        be.observe_byte(byte);
+                    }
                     byte_count += 1;
 
                     if byte_count % report_interval == 0 || byte_count == total_bytes {
@@ -623,13 +635,27 @@ fn cmd_hybrid_eval(args: &[String]) {
                 bridge.reset();
 
                 for &byte in tok_bytes {
-                    let byte_probs = bridge.byte_probs();
-                    let rwkv_bit_preds = byte_probs_to_bit_preds(&byte_probs, byte);
+                    let rwkv_byte_probs = bridge.byte_probs();
+
+                    // Neural blend (Phase 3, R55): blend expert with RWKV at byte level
+                    let blended_byte_probs;
+                    let neural_bit_preds = if let Some(ref be) = blend_expert {
+                        let expert_bp = be.predict_byte();
+                        let alpha = 1.0 / (1.0 + (-blend_logit).exp()); // sigmoid
+                        let mut bp = [0.0f32; 256];
+                        for k in 0..256 {
+                            bp[k] = alpha * rwkv_byte_probs[k] + (1.0 - alpha) * expert_bp[k];
+                        }
+                        blended_byte_probs = bp;
+                        byte_probs_to_bit_preds(&blended_byte_probs, byte)
+                    } else {
+                        byte_probs_to_bit_preds(&rwkv_byte_probs, byte)
+                    };
                     let mut bit_costs = [0.0f64; 8];
 
                     // Build externals list dynamically
                     let mut externals: Vec<[f32; 8]> = Vec::new();
-                    externals.push(rwkv_bit_preds);
+                    externals.push(neural_bit_preds);
 
                     let match_len = if let Some(ref mm) = match_model {
                         let (match_byte_probs, ml) = mm.predict();
@@ -651,7 +677,7 @@ fn cmd_hybrid_eval(args: &[String]) {
                             cm.process_byte_with_externals(byte, &ext_refs)
                         }
                     } else {
-                        cm.process_byte_with_external(byte, &rwkv_bit_preds)
+                        cm.process_byte_with_external(byte, &neural_bit_preds)
                     };
 
                     if need_detailed {
@@ -670,6 +696,15 @@ fn cmd_hybrid_eval(args: &[String]) {
                     }
                     if let Some(ref mut exp) = expert {
                         exp.observe_byte(byte);
+                    }
+                    // Update neural blend: train expert, update alpha
+                    if let Some(ref mut be) = blend_expert {
+                        let rwkv_loss = -(rwkv_byte_probs[byte as usize].max(1e-10)).ln();
+                        let be_loss = -(be.predict_byte()[byte as usize].max(1e-10)).ln();
+                        // If expert is worse than RWKV, push alpha UP (more RWKV)
+                        blend_logit += blend_lr * (be_loss - rwkv_loss);
+                        blend_logit = blend_logit.clamp(-2.0, 8.0);
+                        be.observe_byte(byte);
                     }
                     bridge.advance_byte(byte);
                     byte_count += 1;
@@ -717,6 +752,9 @@ fn cmd_hybrid_eval(args: &[String]) {
                 }
                 if let Some(ref mut exp) = expert {
                     exp.observe_byte(byte);
+                }
+                if let Some(ref mut be) = blend_expert {
+                    be.observe_byte(byte);
                 }
                 byte_count += 1;
             }
