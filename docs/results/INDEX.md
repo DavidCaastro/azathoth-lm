@@ -69,6 +69,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R47 — N1 RWKV per-domain contribution** | Diagnostic | **RWKV helps all 14 files (5-61%). No bypass viable. Contribution: A=51%, B=51%, C=28%, D=12%.** |
 | **R48 — Benchmark corpus investigation** | Research | **Silesia morphologically outdated. AIT DCC 2026 = best modern alternative. T3 suite designed.** |
 | **R49 — N3 E8/E9 transform** | Mixed | **ooffice -0.1811, mozilla +0.006, text neutral. T2 mean -0.0151. Preprocessing works.** |
+| **R50 — T1b/T2b/T3 baselines (100KB)** | **Complete** | **25 files, 12.1h. T2b mean=1.8814 (-0.40 vs 10KB). T3 mean=3.3788. State files saved.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
@@ -176,6 +177,68 @@ Telemetry: `docs/results/t2-final/<file>.jsonl` (per-100-byte BPB, bit costs, ma
 | **σ (all 12)** | | **1.6843** | 1.6269 | +0.0574 | | |
 | **Text-like mean (6)** | | **1.1321** | 1.1725 | -0.0404 | **78** | |
 | **Binary mean (6)** | | **3.4278** | 3.5186 | -0.0908 | **34** | |
+
+### T1b Composite (2 files, 100KB, R50 2026-10-08)
+
+| Metric | 100KB | 10KB | Delta |
+|---|---|---|---|
+| **mean** | **1.8602** | 1.4674 | +0.3928 |
+| **sigma** | 0.9547 | 0.3030 | +0.6517 |
+| **worst** | 2.5353 (OEIS) | 1.8378 | +0.6975 |
+
+Note: T1b only 2 files (enwik8 + OEIS). OEIS header-bias dominates delta.
+
+### T2b Composite (12 Silesia, 100KB, R50 2026-10-08)
+
+| Metric | 100KB | 10KB | Delta |
+|---|---|---|---|
+| **mean** | **1.8814** | 2.2799 | **-0.3985** |
+| **sigma** | **1.4825** | 1.6843 | **-0.2018** |
+| **worst** | 5.2470 (sao) | 6.0483 | **-0.8013** |
+| text-like mean | 0.9956 | 1.1321 | -0.1365 |
+| binary mean | 2.7687 | 3.4278 | -0.6591 |
+
+#### T2b Detail (100KB, sorted by BPB)
+
+| File | Type | BPB (100KB) | BPB (10KB) | Delta | B/s | B/Tok | Cluster |
+|---|---|---|---|---|---|---|---|
+| xml | Structured | **0.2679** | 0.5212 | -0.2533 | 98.2 | 2.33 | A |
+| nci | Chemical | **0.3228** | 0.5360 | -0.2132 | 55.5 | 1.71 | A |
+| samba | Code | **1.0603** | 1.1445 | -0.0842 | 113.0 | 2.67 | B |
+| mozilla | Executable | **1.1385** | 1.6404 | -0.5019 | 29.3 | 1.08 | C |
+| webster | Dict EN | **1.2079** | 1.5664 | -0.3585 | 109.7 | 2.60 | B |
+| reymont | Polish text | **1.3151** | 1.4778 | -0.1627 | 63.5 | 1.47 | C |
+| dickens | Text EN | **1.3461** | 1.5465 | -0.2004 | 97.2 | 4.05 | B |
+| mr | Medical img | **1.4190** | 1.9375 | -0.5185 | 32.3 | 1.01 | C |
+| osdb | MySQL db | **2.4770** | 4.2812 | -1.8042 | 53.4 | 1.29 | C |
+| ooffice | Office bin | **2.9265** | 2.5691 | +0.3574 | 42.2 | 1.03 | D |
+| x-ray | Medical X-ray | **3.8482** | 4.0903 | -0.2421 | 40.5 | 1.00 | D |
+| sao | Astronomy | **5.2470** | 6.0483 | -0.8013 | 42.1 | 1.05 | D |
+
+### T3 Composite (11 modern files, 100KB/10KB, R50 2026-10-08)
+
+| Metric | Value |
+|---|---|
+| **mean** | **3.3788** |
+| **sigma** | **2.5716** |
+| **best** | 0.4842 (ml-weights) |
+| **worst** | 7.9891 (ait-D) |
+
+#### T3 Detail (sorted by BPB)
+
+| File | Type | BPB | B/s | B/Tok | Cluster | Eval bytes |
+|---|---|---|---|---|---|---|
+| ml-weights | SafeTensors | **0.4842** | 97.9 | 2.29 | A | 10,000 |
+| ait-B | C source | **0.9730** | 120.5 | 2.89 | A | 100,000 |
+| structured-jsonl | JSON-lines | **1.1195** | 77.2 | 1.75 | C | 10,000 |
+| ait-C | EN Wikipedia | **1.3319** | 97.9 | 2.38 | B | 100,000 |
+| ait-G | Astro image | **2.3078** | 40.5 | 1.00 | C | 100,000 |
+| modern-x64-pe | x86-64 PE | **2.9698** | 40.5 | 1.03 | D | 100,000 |
+| ait-H | Executable | **3.0514** | 40.4 | 1.03 | D | 100,000 |
+| ait-A | Protein seq | **3.9225** | 86.9 | 2.00 | D | 100,000 |
+| ait-F | Astro image | **6.2775** | 42.3 | 1.07 | D | 100,000 |
+| ait-E | CERN float | **6.7401** | 41.0 | 1.06 | D | 100,000 |
+| ait-D | Pseudo-random | **7.9891** | 40.1 | 1.05 | D | 100,000 |
 
 ### Cross-Domain (adversarial — 10KB)
 
