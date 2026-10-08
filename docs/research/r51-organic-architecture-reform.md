@@ -297,11 +297,11 @@ Implementation: if P(byte) > 0.95 for some byte, emit that byte with 1 bit (flag
 ## Proposed Roadmap (integration phases)
 
 ```
-PHASE 0: Adaptive preprocessing (N4 extended)            <- 0 risk, independent
-|-- Delta coding for numerical sequences
-|-- Byte-plane split for float/multibyte data
-|-- Automatic selection by local statistics
-    Impact: OEIS -0.3 to -0.7, ait-E -2.0 to -4.0
+PHASE 0: Adaptive preprocessing (N4 extended)            <- KILLED (R52)
+|-- Delta coding for numerical sequences               !! Transforms destroy RWKV
+|-- Byte-plane split for float/multibyte data           !! predictions. Incompatible
+|-- Automatic selection by local statistics             !! with pre-trained models.
+    Result: mozilla +4.13, mr +2.39, ooffice +3.04 BPB regression
 
 PHASE 1: Byte-context LSTM + extended BPTT               <- low risk, highest confidence
 |-- Add embedding of last 4 bytes to LSTM
@@ -345,12 +345,12 @@ If any phase fails the gate, it reverts WITHOUT affecting prior phases. Phases a
 | Phase | BPB enwik8 est. | T2b mean est. | Confidence |
 |---|---|---|---|
 | Current | 1.1852 | 1.8814 | -- |
-| +Phase 0 (preproc) | 1.1852 (neutral text) | 1.75 (-0.13) | High |
-| +Phase 1 (byte-ctx LSTM) | 1.17 (-0.015) | 1.70 (-0.05) | High |
-| +Phase 2 (Tweedie) | 1.16 (-0.01) | 1.67 (-0.03) | Medium-high |
-| +Phase 3 (uSSM) | 1.15 (-0.01) | 1.55 (-0.12) | Medium |
-| +Phase 4 (inheritance) | 1.14 (-0.01) | 1.50 (-0.05) | Low |
-| **Cumulative** | **~1.14** | **~1.50** | -- |
+| ~~+Phase 0 (preproc)~~ | ~~1.1852~~ | ~~1.75~~ | **KILLED R52** |
+| +Phase 1 (byte-ctx LSTM) | 1.17 (-0.015) | 1.83 (-0.05) | High |
+| +Phase 2 (Tweedie) | 1.16 (-0.01) | 1.80 (-0.03) | Medium-high |
+| +Phase 3 (uSSM) | 1.15 (-0.01) | 1.68 (-0.12) | Medium |
+| +Phase 4 (inheritance) | 1.14 (-0.01) | 1.63 (-0.05) | Low |
+| **Cumulative** | **~1.14** | **~1.63** | -- |
 
 This would place us at cmix level (1.17) on enwik8 and significantly better cross-domain (T2b mean 1.50 vs current 1.88).
 

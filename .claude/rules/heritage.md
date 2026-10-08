@@ -38,6 +38,11 @@ esta vez seria diferente.
 - Deleting default weights directory: invalidates ALL historical baselines.
   Weight path is an implicit parameter of every result. Must verify
   MANIFEST.md before any deletion. Incident: 2026-10-07, cost ~3h debugging.
+- Adaptive preprocessing (delta/byteplane) in hybrid mode: CATASTROPHIC.
+  Pre-trained RWKV sees transformed data as out-of-distribution noise.
+  mozilla: 1.14→5.26, mr: 1.42→3.81, ooffice: 2.93→5.97 (R52).
+  Preprocessing ONLY viable when ALL predictors are online-adaptive (CM-only).
+  Exception: E8/E9 works because it touches <1% of bytes.
 
 ## De edge-lm (Flux WHT, ~2.16 BPB)
 
@@ -115,7 +120,7 @@ esta vez seria diferente.
 
 ### R51 — Items nuevos (no heredados, descubiertos por investigacion 2024-2026)
 - **uSSM byte-level** (StateSMix/MambaByte): → R51 Phase 3
-- **Adaptive preprocessing** (AIT DCC G2-V3): → R51 Phase 0
+- ~~**Adaptive preprocessing**~~ (AIT DCC G2-V3): → R51 Phase 0 → **KILLED R52** (incompatible with pre-trained RWKV)
 - **CM order-chain** (Chained Neural 2026): → R51 Phase 4, arista E3
 - **Rank-based encoding** (MTF sin BWT): → R51 Phase 4, arista E4
 - **Self-distillation RWKV→uSSM**: → R51 Phase 3, arista E5 (innovacion propia)
