@@ -44,7 +44,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N] [--e8e9]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--match] [--expert] [--expert-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--no-hierarchical] [--no-match] [--no-emb-surgery] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--expert] [--expert-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -401,15 +401,15 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut max_bytes: usize = 0;
     let mut skip_threshold: f32 = 0.0;
     let mut use_lstm = false;
-    let mut use_hierarchical = false;
-    let mut use_match = false;
+    let mut use_hierarchical = true;
+    let mut use_match = true;
     let mut use_expert = false;
     let mut expert_lr: f32 = 0.01;
     let mut lstm_hidden: usize = 128;
     let mut lstm_lr: f32 = 0.002;
     let mut lstm_layers: usize = 1;
     let mut log_path: Option<String> = None;
-    let mut emb_surgery: Option<String> = None;
+    let mut emb_surgery: Option<String> = Some("center0.3".to_string());
     let mut use_e8e9 = false;
     let mut save_state_path: Option<String> = None;
     let mut preprocess_arg: Option<String> = None;
@@ -423,7 +423,10 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--skip" => { i += 1; skip_threshold = args[i].parse().unwrap(); }
             "--lstm" => { use_lstm = true; }
             "--hierarchical" => { use_hierarchical = true; }
+            "--no-hierarchical" => { use_hierarchical = false; }
             "--match" => { use_match = true; }
+            "--no-match" => { use_match = false; }
+            "--no-emb-surgery" => { emb_surgery = None; }
             "--expert" => { use_expert = true; }
             "--expert-lr" => { i += 1; expert_lr = args[i].parse().unwrap(); use_expert = true; }
             "--lstm-hidden" => { i += 1; lstm_hidden = args[i].parse().unwrap(); use_lstm = true; }
