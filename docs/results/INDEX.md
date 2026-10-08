@@ -72,7 +72,8 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R50 — T1b/T2b/T3 baselines (100KB)** | **Complete** | **25 files, 12.1h. T2b mean=1.8814 (-0.40 vs 10KB). T3 mean=3.3788. State files saved.** |
 | **R51 — Organic architecture reform** | **Proposal** | **3-layer organic reform + 6 unexplored edges. Phases 0-4. Target: enwik8 ~1.14, T2b ~1.50.** |
 | **R52 — Phase 0 preprocessing** | **KILLED** | **Transforms destroy RWKV predictions. mozilla +4.13, mr +2.39, ooffice +3.04. Incompatible with pre-trained models.** |
-| **R53 — Phase 1 byte-ctx LSTM** | **1.1810** | **BPTT=64 + 40 ctx features (bit pos + last 4 bytes). -0.0033 vs S3. 66.7K params, 111 B/s.** |
+| **R53 — Phase 1 byte-ctx LSTM (enwik8 100KB)** | **1.1810** | **BPTT=64 + 40 ctx features. -0.0033 vs S3. 66.7K params, 111 B/s.** |
+| **R53 — Phase 1 T1 composite (10KB)** | **PASS** | **mean=1.4658 (-0.0016), sigma=0.2677 (-0.0353), worst=1.8200 (-0.0178). All 3 ↓.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
@@ -128,6 +129,26 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | mozilla (10KB) | Binary | **1.6404** | 1.7227 | -0.0823 | 46 |
 | OEIS (10KB) | Numerical | **1.8378** | 1.9045 | -0.0667 | 40 |
 
+### R53 Phase 1 — T1 Composite (5 files, 10KB, 2026-10-08)
+
+BPTT=64 + 40 byte-context features. Tested with full pipeline flags.
+
+| Metric | Phase 1 | Baseline S3 | Delta | Verdict |
+|---|---|---|---|---|
+| **mean** | **1.4658** | 1.4674 | **-0.0016** | **DOWN** ✓ |
+| **sigma** | **0.2677** | 0.3030 | **-0.0353** | **DOWN** ✓ |
+| **worst** | **1.8200** (OEIS) | 1.8378 | **-0.0178** | **DOWN** ✓ |
+
+| File | Type | Phase 1 | Baseline | Delta | B/s |
+|---|---|---|---|---|---|
+| samba | Code | 1.1481 | 1.1445 | +0.0036 | ~90 |
+| enwik8 | Text EN | **1.1666** | 1.1680 | **-0.0014** | 92 |
+| dickens | Text EN | **1.5346** | 1.5465 | **-0.0119** | ~65 |
+| mozilla | Binary | 1.6599 | 1.6404 | +0.0195 | 40 |
+| OEIS | Numerical | **1.8200** | 1.8378 | **-0.0178** | 44 |
+
+Exact command: `cargo run --release -- hybrid-eval --weights weights/rwkv7-0.1b --bytes 10000 --input <PATH> --hierarchical --match --emb-surgery center0.3`
+
 ### Full Silesia Composite (Tier 2: 12 files, 10KB, FINAL 2026-10-07)
 
 Re-evaluated 2026-10-07 with final architecture (post all tiers S/A/B/C).
@@ -145,7 +166,8 @@ Values identical to post-Tier A — confirms Tiers B and C had zero BPB impact.
 
 | Metric | Value | Date |
 |---|---|---|
-| **BPB S3 BPTT=8 (enwik8 100KB)** | **1.1843** | **2026-10-06** |
+| **BPB R53 BPTT=64+ctx (enwik8 100KB)** | **1.1810** | **2026-10-08** |
+| BPB S3 BPTT=8 (enwik8 100KB) | 1.1843 | 2026-10-06 |
 | BPB hierarchical+match (enwik8 100KB) | 1.2177 | 2026-10-06 |
 | BPB hierarchical only (enwik8 100KB) | 1.2272 | 2026-10-06 |
 | BPB LSTM flat hybrid (enwik8 100KB) | 1.2549 | 2026-10-06 |

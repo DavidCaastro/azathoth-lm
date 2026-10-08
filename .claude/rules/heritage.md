@@ -43,6 +43,11 @@ esta vez seria diferente.
   mozilla: 1.14→5.26, mr: 1.42→3.81, ooffice: 2.93→5.97 (R52).
   Preprocessing ONLY viable when ALL predictors are online-adaptive (CM-only).
   Exception: E8/E9 works because it touches <1% of bytes.
+- Missing CLI flags in eval: produces INVALID results. ALWAYS use the full
+  flag set: `--hierarchical --match --emb-surgery center0.3`. Without these,
+  eval uses a flat mixer (~1.62 BPB on enwik8 vs 1.17 with full pipeline).
+  Incident: 2026-10-08, T1 eval without flags showed false +0.88 regression
+  on mozilla, wasted 1h on a false Phase 1 kill before discovering the error.
 
 ## De edge-lm (Flux WHT, ~2.16 BPB)
 
