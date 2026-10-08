@@ -424,6 +424,291 @@ All 25 evals saved state files via `--save-state` (AZ02 format).
 State files: ~130 MB each, ~3.2 GB total. Gitignored (reproducible artifacts).
 Metadata readable without parsing model state (first section in file).
 
+## 3D Position Matrix
+
+### Axes
+
+| Axis | Metric | Range | Captures |
+|---|---|---|---|
+| **X: Tokenization** | B/Tok | 1.00–4.05 | RWKV contribution potential |
+| **Y: Performance** | BPB | 0.27–7.99 | Prediction quality (outcome) |
+| **Z: Bottleneck shape** | bits3-5 / BPB | 36%–68% | Concentrated (char ID) vs uniform (entropy) |
+
+Z high (>55%) = cost concentrated in "which character?" — structure exists but
+model can't predict content. Improvement possible via better temporal context.
+Z low (<40%) = cost uniform across all bits — intrinsic entropy, little room.
+
+### All 25 files positioned
+
+```
+             X (B/Tok)    Y (BPB)    Z (bits3-5%)    Cluster
+─────────────────────────────────────────────────────────────
+enwik8          3.99       1.1852       63.7%            B
+dickens         4.05       1.3461       67.5%            B
+webster         2.60       1.2079       64.5%            B
+samba           2.67       1.0603       57.7%            B
+ait-C           2.38       1.3319       55.8%            B
+ait-B           2.89       0.9730       57.5%            A
+xml             2.33       0.2679       52.0%            A
+nci             1.71       0.3228       42.6%            A
+ml-weights      2.29       0.4842       43.4%            A
+reymont         1.47       1.3151       51.8%            C
+structured      1.75       1.1195       43.2%            C
+mozilla         1.08       1.1385       38.3%            C
+mr              1.01       1.4190       46.7%            C
+osdb            1.29       2.4770       39.9%            C
+oeis            1.56       2.5353       47.6%            C
+ait-G           1.00       2.3078       43.4%            C
+ooffice         1.03       2.9265       38.6%            D
+modern-pe       1.03       2.9698       37.6%            D
+ait-H           1.03       3.0514       37.2%            D
+x-ray           1.00       3.8482       41.1%            D
+ait-A           2.00       3.9225       64.6%            D*
+sao             1.05       5.2470       36.4%            D
+ait-F           1.07       6.2775       41.8%            D
+ait-E           1.06       6.7401       36.3%            D
+ait-D           1.05       7.9891       37.6%            D
+```
+
+*ait-A is a critical outlier: B/Tok=2.00 (efficient tokenization zone) but
+BPB=3.92 and Z=64.6% (concentrated bottleneck). Protein sequences have a
+defined alphabet (~20 amino acids → good tokenization) but low sequential
+redundancy (RWKV never saw proteins in pretraining). Demonstrates that
+tokenization efficiency and pretraining alignment are orthogonal factors.*
+
+### X-Y projection (tokenization vs performance)
+
+```
+BPB
+ 8 ┤                                                    · ait-D
+   │
+ 7 ┤                                              · ait-E
+   │                                           · ait-F
+ 6 ┤
+   │                                        · sao
+ 5 ┤
+   │
+ 4 ┤                            ait-A ·  · x-ray
+   │                      ait-H · · ooffice, modern-pe
+ 3 ┤
+   │                    oeis · osdb ·    ait-G ·
+ 2 ┤
+   │     mozilla · mr ·  reymont ·        ait-C · dickens ·
+ 1 ┤  struct ·                   webster · samba ·  enwik8 · ait-B ·
+   │                    nci ·  ml-w ·          xml ·
+ 0 ┤────────────────────────────────────────────────────────────
+   1.0        1.5        2.0        2.5        3.0        4.0  B/Tok
+        RWKV useless ◄──────────────────────────► RWKV effective
+```
+
+Three visible zones:
+1. **Effective zone** (low Y, high X): B/Tok>2, BPB<1.5 — RWKV+CM synergy
+2. **Compensated zone** (low Y, low X): B/Tok~1, BPB<2.5 — CM compensates absent RWKV
+3. **Irreducible zone** (high Y, low X): B/Tok~1, BPB>3 — both models fail
+
+### X-Z projection (tokenization vs bottleneck shape)
+
+```
+Z (bits3-5%)
+ 68 ┤  dickens ·
+    │  ait-A ·                         webster ·
+ 64 ┤                                  enwik8 ·
+    │
+ 60 ┤
+    │              ait-B · samba ·  ait-C ·
+ 56 ┤
+    │          xml ·  reymont ·
+ 52 ┤
+    │          oeis · mr ·
+ 48 ┤
+    │  ait-G · ml-w · struct ·  nci ·
+ 44 ┤
+    │  x-ray · ait-F ·  osdb ·
+ 40 ┤
+    │  ooffice · modern-pe · ait-D · ait-H · ait-E · sao ·
+ 36 ┤──────────────────────────────────────────────────────────
+    1.0        1.5        2.0        2.5        3.0        4.0  B/Tok
+```
+
+Two horizontal bands:
+- **Z > 50%**: bottleneck concentrated in character identification. Data has
+  range structure (ASCII, digits, amino acids). A stronger character predictor
+  (byte-level BPTT, RunMap) would impact these files directly.
+- **Z < 42%**: difficulty uniform across all bits. Little room for improvement
+  — no "easy" bit position to exploit. Near intrinsic entropy limits.
+
+### Key 3D relationships
+
+1. **BPB = f(intrinsic_entropy) × g(RWKV_contribution(B/Tok)) × h(CM_contribution(local_repetition))**
+   Three multiplicative factors, not additive. This explains why ait-A breaks
+   the B/Tok→BPB correlation: good tokenization × zero pretraining alignment
+   × low repetition = high BPB despite high B/Tok.
+
+2. **Z separates "improvable" from "irreducible"**: files with Z>50% have
+   concentrated bottlenecks amenable to better temporal modeling. Files with
+   Z<40% are near their entropy floor — only preprocessing can help.
+
+3. **The compensated zone (mozilla, mr at BPB<1.5 despite B/Tok~1.0) proves
+   CM can fully substitute RWKV** when local patterns exist. CM's improvement
+   from 10KB→100KB (mozilla -0.50, mr -0.52) confirms it scales with data.
+
+## Interdependency Graph
+
+### Root causes (Level 0)
+
+| ID | Root Cause | Nature | Addressable? |
+|---|---|---|---|
+| RC1 | RWKV tokenizer mismatch (B/Tok~1.0 on binary) | Architectural | Requires byte-level neural |
+| RC2 | Intrinsic data entropy (near 8.0 for random) | Fundamental | No — information-theoretic limit |
+| RC3 | RWKV pretraining domain gap (protein, astro) | Data | Requires fine-tune or new model (GPU) |
+| RC4 | LSTM mixer BPTT=8 bits (=1 byte context) | Architectural | Scalable but compute-expensive |
+| RC5 | CM scale limited (hash tables at 100KB) | Resource | Scales with data + eval time |
+| RC6 | No preprocessing framework for non-x86 binary | Architectural | Implementable |
+
+### Deficiencies (Level 1) — caused by root causes
+
+| ID | Deficiency | Magnitude | Files affected | Root causes |
+|---|---|---|---|---|
+| D1 | Cluster D = 40% of files | 10/25 files, BPB>2.6 | ooffice,pe,ait-H,A,x-ray,sao,F,E,D | RC1+RC2+RC3 |
+| D2 | B/Tok~1.0 renders RWKV useless | 14/25 files | All B/Tok<1.1 | RC1 |
+| D3 | Numerical data unpredictable | +0.70 BPB OEIS | OEIS, ait-E | RC1+RC3 |
+| D4 | Bits 3-5 bottleneck in text (63-68%) | ~0.75 BPB trapped | enwik8,dickens,webster,ait-C | RC4 |
+| D5 | ooffice WORSE at 100KB (+0.36) | Only regression | ooffice | RC6 |
+| D6 | Pretraining misalignment | B/Tok=2 but BPB=3.9 | ait-A, ait-F, ait-G | RC3 |
+| D7 | CM scales with data but eval limited | mozilla -0.50 at 100KB | All | RC5+time |
+
+### Solutions mapping (Level 2)
+
+```
+    SOLUTION                         DEFICIENCY    COVERAGE   DEPENDENCIES
+    ──────────────────────────────────────────────────────────────────────
+
+    IN ROADMAP:
+
+    N4 (delta coding)  ────────────► D3 (numeric)    70%      None. Implementable now.
+                                     OEIS, osdb              Only integers, not floats.
+
+    N6 (enwik8 100MB)  ────────────► D7 (scale)      90%      None technical.
+                                     All (info)               9-29 days compute.
+
+    N5 (specialized CM)──┬─────────► D1 (Cluster D)  20%      BLOCKED: mixer group
+                         └─────────► D2 (B/Tok~1)    30%      overhead pattern.
+
+    IN HERITAGE (not ported):
+
+    BPTT=40 BYTES      ──┬─────────► D4 (bits 3-5)   80%      S2 ✓ S3 ✓ Adam ✓
+                         └─────────► D2 (B/Tok~1)    40%      Compute 40x.
+                                                              Never tested at byte scale.
+
+    RunMap per context  ───────────► D4 (bits 3-5)    40%      None direct.
+                                     Text files               Est. -0.03 to -0.06.
+
+    E8/E9 extended      ───────────► D5 (ooffice)     30%      PE/COFF format analysis.
+
+    NOT IN ROADMAP:
+
+    Byte-level neural   ──┬────────► D2 (B/Tok~1)    90%      GPU for training.
+                          └────────► D1 (Cluster D)  40%      Not available.
+
+    Preprocess framework──┬────────► D5 (ooffice)     80%      Design extensible pipeline.
+                          └────────► D1 (Cluster D)  30%      Per-format transforms.
+
+    GPU access          ───────────► D6 (pretrain)    90%      Hardware. Not available.
+
+    Float transform     ───────────► D3 (numeric)     30%      Split exponent/mantissa.
+                                     ait-E, floats            Non-trivial design.
+```
+
+### Solution interdependencies
+
+```
+                          ┌──────────┐
+                          │   GPU    │
+                          │(blocked) │
+                          └────┬─────┘
+                               │ unblocks
+                    ┌──────────┴──────────┐
+                    ▼                     ▼
+             ┌────────────┐        ┌────────────┐
+             │ Fine-tune  │        │ Byte-level │
+             │ RWKV       │        │ neural     │
+             │ (D6)       │        │ (D1,D2)    │
+             └────────────┘        └─────┬──────┘
+                                         │ would replace
+                                         ▼
+                     ┌──────────────────────────────────┐
+                     │  BPTT=40 bytes (Heritage)        │
+                     │  D4 (bits 3-5) + D2 (compensate) │
+                     │  Prereqs: S2 ✓ S3 ✓ Adam ✓      │
+                     │  Blocker: compute 40x             │
+                     └──────────┬───────────────────────┘
+                                │ complementary
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+             ┌────────────┐          ┌────────────┐
+             │  RunMap    │          │    N5      │
+             │ per context│          │ CM special.│
+             │  (D4)      │          │  (D1,D2)   │
+             │ Indep.     │          │  BLOCKED:  │
+             └────────────┘          │  mixer     │
+                                     │  overhead  │
+                                     └────────────┘
+
+    ┌────────────┐     ┌────────────┐     ┌────────────┐
+    │    N4      │     │    N6      │     │ Preprocess │
+    │ Delta cod. │     │ Scale eval │     │ framework  │
+    │   (D3)     │     │   (D7)     │     │  (D1,D5)   │
+    │ INDEP.     │     │ INDEP.     │     │ INDEP.     │
+    │ No risk    │     │ Time only  │     │ Not exist  │
+    └────────────┘     └────────────┘     └────────────┘
+         ▲                  ▲                   ▲
+    ─────┴──────────────────┴───────────────────┴─────
+              EXECUTABLE WITHOUT DEPENDENCIES
+```
+
+### Executability tiers
+
+**Tier 1 — Executable now, no dependencies, no risk:**
+
+| Item | Impact | Files benefited | Effort |
+|---|---|---|---|
+| **N4 (delta coding)** | -0.3 to -0.7 on OEIS, osdb | 2-3 files (D3) | Medium |
+| **N6 (enwik8 100MB)** | Informational — validates scaling | All (D7) | High (9-29 days) |
+| **RunMap per context** | -0.03 to -0.06 on text | 5-6 files (D4) | Medium (port) |
+
+**Tier 2 — Executable with known risk:**
+
+| Item | Impact | Blocker | Risk |
+|---|---|---|---|
+| **BPTT=40 bytes** | High on text (D4+D2) | Compute 40x | B1 killed BPTT=16/32 bits, but 40 BYTES never tested |
+| **N5 (CM special.)** | Medium on binary (D1+D2) | Mixer group overhead | Known regression pattern |
+| **Preprocess framework** | Medium on D5 | Does not exist | Domain-specific, not generalizable |
+
+**Tier 3 — Blocked by hardware:**
+
+| Item | Impact | Blocker |
+|---|---|---|
+| **Byte-level neural** | Transformative (D1+D2) | GPU for training |
+| **Fine-tune RWKV** | High (D6) | GPU for fine-tune |
+| **Float transform** | Low-medium (D3 partial) | Non-trivial design |
+
+### Key insight from graph
+
+The dependency-free solutions (N4, N6, RunMap) are incremental — they improve
+specific files but don't change the problem structure. The transformative
+solutions (byte-level BPTT, byte-level neural) are in a dependency chain
+where the most impactful (byte-level neural) requires GPU.
+
+**BPTT=40 bytes is the critical node**: it's the only item that impacts both
+D4 (text bottleneck) AND D2 (compensate RWKV) without requiring GPU. It was
+killed prematurely — B1 tested BPTT=16/32 **bits** and discarded it, but
+heritage suggests BPTT=40 **bytes** (320 bits), a completely different scale
+that was never tested. The real blocker is compute cost (40x backprop), not
+technical viability.
+
+**N4 is the highest value/risk ratio**: no dependencies, no architectural risk,
+measurable impact on specific files. It's the optimal next move.
+
 ## Hardware
 
 - CPU: Intel i5-1235U (Alder Lake), 12 threads
