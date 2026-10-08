@@ -78,6 +78,8 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R55 — Phase 3 neural blend T1 (10KB)** | **PASS** | **mean=1.4437 (-0.0221), sigma=0.2672 (-0.0005), worst=1.8215 (+0.0015). Binary -0.0096.** |
 | **R56 — Phase 4 E3 order-chain T1 (10KB)** | **PASS** | **mean=1.4412 (-0.0247), sigma=0.2574 (-0.0103), worst=1.8184 (-0.0016). All 5 domains ↓.** |
 | **R56 — Phase 4 E4 rank-context** | **KILLED** | **mean +0.0098, sigma +0.0082, worst +0.0146. MTF context destroys exact matching at 10KB.** |
+| **R57 — Strategic positioning** | **Research** | **Universal data synthesis core vision. Adaptive middleware as sellable subproduct.** |
+| **R58 — Multi-backbone inventory** | **Research** | **50+ pretrained backbones cataloged. MambaByte (byte-level SSM) = top discovery. Roadmap reformulation pending.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
