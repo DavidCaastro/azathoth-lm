@@ -3,7 +3,9 @@
 //! S1 (R35): Coupled gates i = 1 - f. -25% gate params.
 //! S2 (R36): Per-gate LayerNorm. Stabilizes gradients.
 //! S3 (R37): BPTT=8 (1 byte). Adam(beta1≈0, beta2=0.9999).
-//!           First temporal learning across bits within a byte.
+//! R53 Phase 1: BPTT=64 (8 bytes) + byte context (40 features).
+//!   Context = bit position one-hot(8) + last 4 bytes binary(32).
+//!   Context enriches LSTM hidden state but does NOT get mixing weights.
 //! B1 (R43): 2-layer LSTM. Layer 2 takes layer 1 hidden as input.
 //!
 //! cmix reference: 2×200, BPTT=100 bytes, Adam(0.025, 0.9999),
@@ -11,7 +13,7 @@
 //! NNCP: Adam(beta1=0.0) = effectively RMSProp.
 //!
 //! Design: output layer updated every bit (SGD). Gate weights
-//! updated every 8 bits (1 byte) via BPTT + Adam. Hidden/cell
+//! updated every 64 bits (8 bytes) via BPTT + Adam. Hidden/cell
 //! state persists across BPTT boundaries (gradients truncated).
 
 #[inline]
@@ -38,7 +40,7 @@ fn det_rand(seed: u64) -> f32 {
 
 const GRAD_CLIP: f32 = 5.0;
 const LN_EPS: f32 = 1e-5;
-const BPTT_LEN: usize = 8;
+const BPTT_LEN: usize = 64;
 const ADAM_BETA1: f32 = 0.02;  // near-zero momentum (cmix=0.025, NNCP=0.0)
 const ADAM_BETA2: f32 = 0.9999;
 const ADAM_EPS: f32 = 1e-6;
@@ -425,6 +427,7 @@ impl LstmLayer {
 /// Output layer: SGD, updated every bit (immediate).
 pub struct LstmBitMixer {
     n_models: usize,
+    context_dim: usize,
     hidden_dim: usize,
 
     layers: Vec<LstmLayer>,
@@ -433,7 +436,7 @@ pub struct LstmBitMixer {
     w_out: Vec<f32>,    // [n_models * H]
     b_out: Vec<f32>,    // [n_models]
 
-    // Cached input (stretched model probs)
+    // Cached input: [stretch(model_probs) | context_features]
     cached_input: Vec<f32>,
 
     // BPTT state
@@ -449,15 +452,20 @@ pub struct LstmBitMixer {
 
 impl LstmBitMixer {
     pub fn new(n_models: usize, hidden_dim: usize, lr: f32) -> Self {
-        Self::new_with_layers(n_models, hidden_dim, lr, 1)
+        Self::new_full(n_models, 0, hidden_dim, lr, 1)
     }
 
     pub fn new_with_layers(n_models: usize, hidden_dim: usize, lr: f32, n_layers: usize) -> Self {
+        Self::new_full(n_models, 0, hidden_dim, lr, n_layers)
+    }
+
+    pub fn new_full(n_models: usize, context_dim: usize, hidden_dim: usize, lr: f32, n_layers: usize) -> Self {
+        let full_input = n_models + context_dim;
         let mut seed = 42u64;
         let mut layers = Vec::with_capacity(n_layers);
 
         for l in 0..n_layers {
-            let input_dim = if l == 0 { n_models } else { hidden_dim };
+            let input_dim = if l == 0 { full_input } else { hidden_dim };
             layers.push(LstmLayer::new(input_dim, hidden_dim, &mut seed));
         }
 
@@ -471,11 +479,12 @@ impl LstmBitMixer {
 
         Self {
             n_models,
+            context_dim,
             hidden_dim,
             layers,
             w_out,
             b_out,
-            cached_input: vec![0.0; n_models],
+            cached_input: vec![0.0; full_input],
             bptt_step: 0,
             bptt_n: 0,
             hist_d_h: vec![0.0; BPTT_LEN * hidden_dim],
@@ -489,44 +498,82 @@ impl LstmBitMixer {
             return;
         }
 
-        // Extend layer 0 input
-        self.layers[0].extend_input(new_total);
+        let old = self.n_models;
+        let old_input = old + self.context_dim;
+        let new_input = new_total + self.context_dim;
 
-        // Extend output layer
+        // Extend layer 0: insert model columns at old position, shift context right
+        let layer = &mut self.layers[0];
+        let h3 = 3 * layer.hidden_dim;
+        let mut new_w = vec![0.0f32; h3 * new_input];
+        let mut new_m = vec![0.0f32; h3 * new_input];
+        let mut new_v = vec![0.0f32; h3 * new_input];
+        for row in 0..h3 {
+            for col in 0..old {
+                new_w[row * new_input + col] = layer.w_ih[row * old_input + col];
+                new_m[row * new_input + col] = layer.m_ih[row * old_input + col];
+                new_v[row * new_input + col] = layer.v_ih[row * old_input + col];
+            }
+            for col in old..new_total {
+                new_w[row * new_input + col] = 0.01;
+            }
+            for col in 0..self.context_dim {
+                new_w[row * new_input + new_total + col] = layer.w_ih[row * old_input + old + col];
+                new_m[row * new_input + new_total + col] = layer.m_ih[row * old_input + old + col];
+                new_v[row * new_input + new_total + col] = layer.v_ih[row * old_input + old + col];
+            }
+        }
+        layer.w_ih = new_w;
+        layer.m_ih = new_m;
+        layer.v_ih = new_v;
+        layer.input_dim = new_input;
+        layer.hist_input = vec![0.0; BPTT_LEN * new_input];
+
+        // Extend output layer (only n_models, not context)
         let h = self.hidden_dim;
         let mut new_w_out = vec![0.0f32; new_total * h];
-        for k in 0..self.n_models {
+        for k in 0..old {
             for j in 0..h {
                 new_w_out[k * h + j] = self.w_out[k * h + j];
             }
         }
         self.w_out = new_w_out;
         self.b_out.resize(new_total, 1.0 / new_total as f32);
-        self.cached_input.resize(new_total, 0.0);
+        self.cached_input.resize(new_input, 0.0);
 
         self.n_models = new_total;
     }
 
-    /// Forward pass: multi-layer LSTM → dynamic mixing weights → prediction.
+    /// Forward pass without context (backward compatible).
     pub fn predict(&mut self, model_probs: &[f32]) -> f32 {
+        self.predict_ctx(model_probs, &[])
+    }
+
+    /// Forward pass with context features.
+    /// model_probs are stretched internally. ctx features are used as-is.
+    /// Output mixing weights only apply to model_probs, not ctx.
+    pub fn predict_ctx(&mut self, model_probs: &[f32], ctx: &[f32]) -> f32 {
         let n = model_probs.len().min(self.n_models);
+        let nc = ctx.len().min(self.context_dim);
         let t = self.bptt_step;
 
-        // Build input: stretched predictions
+        // Build input: stretched model predictions + raw context
         for i in 0..n {
             self.cached_input[i] = stretch(model_probs[i]);
         }
+        for i in 0..nc {
+            self.cached_input[self.n_models + i] = ctx[i];
+        }
+        let input_len = n + nc;
 
         // Forward through all layers
-        self.layers[0].forward(&self.cached_input[..n], t);
+        self.layers[0].forward(&self.cached_input[..input_len], t);
         for l in 1..self.layers.len() {
-            // Layer l takes layer l-1's hidden state as input
-            // We need to copy because of borrow checker
             let prev_h: Vec<f32> = self.layers[l - 1].h.clone();
             self.layers[l].forward(&prev_h, t);
         }
 
-        // Output: dynamic mixing weights from last layer's hidden → logit sum
+        // Output: dynamic mixing weights only for model predictions
         let last_h = &self.layers.last().unwrap().h;
         let hd = self.hidden_dim;
         let mut logit_sum = 0.0f32;
@@ -542,9 +589,15 @@ impl LstmBitMixer {
         squash(logit_sum)
     }
 
-    /// Update: output layer SGD (immediate) + store d_h for BPTT.
+    /// Update without context (backward compatible).
     pub fn update(&mut self, model_probs: &[f32], prediction: f32, actual: u8) {
+        self.update_ctx(model_probs, &[], prediction, actual)
+    }
+
+    /// Update with context: output layer SGD (immediate) + store d_h for BPTT.
+    pub fn update_ctx(&mut self, model_probs: &[f32], ctx: &[f32], prediction: f32, actual: u8) {
         let n = model_probs.len().min(self.n_models);
+        let nc = ctx.len().min(self.context_dim);
         let hd = self.hidden_dim;
         let t = self.bptt_step;
         let h_off = t * hd;
@@ -570,7 +623,7 @@ impl LstmBitMixer {
         }
 
         if t == 0 {
-            self.bptt_n = n;
+            self.bptt_n = n + nc;
         }
 
         self.bptt_step += 1;
@@ -611,6 +664,7 @@ impl LstmBitMixer {
     /// Serialize LSTM mixer state to a byte buffer.
     pub fn serialize_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&(self.n_models as u32).to_le_bytes());
+        out.extend_from_slice(&(self.context_dim as u32).to_le_bytes());
         out.extend_from_slice(&(self.hidden_dim as u32).to_le_bytes());
         out.extend_from_slice(&(self.layers.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.adam_t.to_le_bytes());
@@ -648,6 +702,7 @@ impl LstmBitMixer {
     #[allow(dead_code)] // will be used by --load-state CLI flag
     pub fn deserialize_from(&mut self, data: &[u8], mut pos: usize) -> usize {
         self.n_models = read_u32(data, &mut pos) as usize;
+        self.context_dim = read_u32(data, &mut pos) as usize;
         self.hidden_dim = read_u32(data, &mut pos) as usize;
         let n_layers = read_u32(data, &mut pos) as usize;
         self.adam_t = read_u64(data, &mut pos);
@@ -732,7 +787,7 @@ mod tests {
         let probs = [0.5f32, 0.3, 0.7];
         let pred = mixer.predict(&probs);
         assert!(pred > 0.0 && pred < 1.0, "prediction out of range: {}", pred);
-        for bit in 0..8 {
+        for bit in 0..BPTT_LEN {
             let p = mixer.predict(&probs);
             mixer.update(&probs, p, (bit % 2) as u8);
         }
@@ -788,13 +843,11 @@ mod tests {
     fn lstm_bptt_fires() {
         let mut mixer = LstmBitMixer::new(2, 16, 0.01);
         let probs = [0.7f32, 0.3];
-        // Before BPTT: bptt_step advances 0..(BPTT_LEN-1)
         for bit in 0..(BPTT_LEN - 1) {
             let p = mixer.predict(&probs);
             mixer.update(&probs, p, (bit & 1) as u8);
             assert_eq!(mixer.bptt_step, bit + 1);
         }
-        // BPTT_LEN-th update triggers backward, resets step to 0
         let p = mixer.predict(&probs);
         mixer.update(&probs, p, 1);
         assert_eq!(mixer.bptt_step, 0);
@@ -807,8 +860,7 @@ mod tests {
         let probs = [0.5f32, 0.3, 0.7];
         let pred = mixer.predict(&probs);
         assert!(pred > 0.0 && pred < 1.0, "2-layer prediction out of range: {}", pred);
-        // Full BPTT cycle
-        for bit in 0..8 {
+        for bit in 0..BPTT_LEN {
             let p = mixer.predict(&probs);
             mixer.update(&probs, p, (bit % 2) as u8);
         }
@@ -826,5 +878,58 @@ mod tests {
             last_pred = pred;
         }
         assert!(last_pred > 0.55, "2-layer LSTM should learn toward 1: {}", last_pred);
+    }
+
+    #[test]
+    fn lstm_ctx_basic() {
+        let mut mixer = LstmBitMixer::new_full(3, 8, 32, 0.01, 1);
+        let probs = [0.5f32, 0.3, 0.7];
+        let ctx = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // bit pos 0
+        let pred = mixer.predict_ctx(&probs, &ctx);
+        assert!(pred > 0.0 && pred < 1.0, "ctx prediction out of range: {}", pred);
+        // Full BPTT cycle (64 steps)
+        for bit in 0..BPTT_LEN {
+            let p = mixer.predict_ctx(&probs, &ctx);
+            mixer.update_ctx(&probs, &ctx, p, (bit % 2) as u8);
+        }
+        assert_eq!(mixer.adam_t, 1);
+    }
+
+    #[test]
+    fn lstm_ctx_learns() {
+        let mut mixer = LstmBitMixer::new_full(2, 8, 32, 0.01, 1);
+        let probs = [0.9f32, 0.1];
+        let ctx = [0.5, -0.5, 0.5, -0.5, 0.5, -0.5, 0.5, -0.5];
+        let mut last_pred = 0.0;
+        for _ in 0..400 {
+            let pred = mixer.predict_ctx(&probs, &ctx);
+            mixer.update_ctx(&probs, &ctx, pred, 1);
+            last_pred = pred;
+        }
+        assert!(last_pred > 0.55, "LSTM with ctx should learn toward 1: {}", last_pred);
+    }
+
+    #[test]
+    fn lstm_ctx_extend_preserves_context() {
+        let mut mixer = LstmBitMixer::new_full(2, 4, 16, 0.01, 1);
+        let probs = [0.5f32, 0.3];
+        let ctx = [1.0, 0.0, 0.0, 0.0];
+        let _ = mixer.predict_ctx(&probs, &ctx);
+        mixer.extend_models(4);
+        let probs4 = [0.5f32, 0.3, 0.7, 0.4];
+        let pred = mixer.predict_ctx(&probs4, &ctx);
+        assert!(pred > 0.0 && pred < 1.0);
+        assert_eq!(mixer.context_dim, 4);
+        assert_eq!(mixer.layers[0].input_dim, 8); // 4 models + 4 ctx
+    }
+
+    #[test]
+    fn lstm_ctx_param_count() {
+        let mixer = LstmBitMixer::new_full(4, 40, 128, 0.001, 1);
+        // Layer 0: input=44 (4+40), H=128, 3 gates
+        // 3*(128*44 + 128*128 + 128) + 2*3*128 = 3*(5632+16384+128) + 768
+        let l0 = 3 * (128 * 44 + 128 * 128 + 128) + 2 * 3 * 128;
+        let out = 4 * 128 + 4;
+        assert_eq!(mixer.param_count(), l0 + out, "ctx param count mismatch");
     }
 }

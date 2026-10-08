@@ -591,6 +591,8 @@ enum MixerKind {
         sub_mixers: Vec<BitMixer>,
         top_lstm: LstmBitMixer,
         group_buf: Vec<f32>,
+        /// Buffer for byte context features (bit position + last 4 bytes)
+        ctx_buf: Vec<f32>,
     },
 }
 
@@ -601,6 +603,9 @@ enum MixerKind {
 /// Processes raw bytes, predicting each as 8 bits (MSB first).
 /// Combines predictions from multiple hash-table models
 /// (order, sparse, indirect) via logistic or LSTM mixing.
+/// Byte context dimension for LSTM enrichment: 8 (bit position) + 32 (last 4 bytes)
+const BYTE_CTX_DIM: usize = 40;
+
 pub struct ContextMixer {
     models: Vec<ContextModel>,
     mixer: MixerKind,
@@ -608,6 +613,9 @@ pub struct ContextMixer {
     max_history: usize,
     history_len: usize,
     pred_buf: Vec<f32>,
+    // Byte context for LSTM enrichment (Phase 1, R53)
+    last_bytes: [u8; 4],
+    byte_count: usize,
 }
 
 // Sparse model offset tables (static lifetime).
@@ -671,6 +679,8 @@ impl ContextMixer {
             max_history,
             history_len: 0,
             pred_buf: vec![0.0f32; n_models],
+            last_bytes: [0u8; 4],
+            byte_count: 0,
         }
     }
 
@@ -686,26 +696,25 @@ impl ContextMixer {
             max_history,
             history_len: 0,
             pred_buf: vec![0.0f32; n_models],
+            last_bytes: [0u8; 4],
+            byte_count: 0,
         }
     }
 
     /// Create with hierarchical grouping + LSTM top mixer.
     /// Groups: [orders 0-2] [orders 3-8 + sparse + indirect + word] + auto-extended [externals].
+    /// LSTM enriched with byte context (R53 Phase 1): bit position + last 4 bytes = 40 features.
     pub fn new_with_hierarchical(hidden_dim: usize, lr: f32, n_layers: usize) -> Self {
         let models = Self::build_models();
         let max_history = 32;
-        // Group 0: CM orders 0-2 (short context patterns) — 3 models
-        // Group 1: CM orders 3-8 + sparse + indirect + word (long context) — 11 models
         let n_cm = models.len();
         let group_starts = vec![0, 3, n_cm];
         let n_groups = 2;
         let sub_mixers = vec![
-            BitMixer::new(3, 0.05),       // Group 0: orders 0-2
-            BitMixer::new(n_cm - 3, 0.05), // Group 1: orders 3-8 + sparse + indirect + word
+            BitMixer::new(3, 0.05),
+            BitMixer::new(n_cm - 3, 0.05),
         ];
-        let top_lstm = LstmBitMixer::new_with_layers(n_groups, hidden_dim, lr, n_layers);
-        // APM post-LSTM correction stages (A1)
-        // Stage 0: bit position context (8 entries × 33 bins = 1.1 KB)
+        let top_lstm = LstmBitMixer::new_full(n_groups, BYTE_CTX_DIM, hidden_dim, lr, n_layers);
         Self {
             models,
             mixer: MixerKind::Hierarchical {
@@ -713,11 +722,14 @@ impl ContextMixer {
                 sub_mixers,
                 top_lstm,
                 group_buf: vec![0.5; n_groups],
+                ctx_buf: vec![0.0; BYTE_CTX_DIM],
             },
             history: Vec::with_capacity(max_history),
             max_history,
             history_len: 0,
             pred_buf: vec![0.0f32; Self::N_MODELS],
+            last_bytes: [0u8; 4],
+            byte_count: 0,
         }
     }
 
@@ -783,6 +795,8 @@ impl ContextMixer {
         for model in &mut self.models {
             model.on_byte_done(byte);
         }
+        self.last_bytes[self.byte_count % 4] = byte;
+        self.byte_count += 1;
         if self.history.len() < self.max_history {
             self.history.push(byte);
         } else {
@@ -804,7 +818,7 @@ impl ContextMixer {
         match &mut self.mixer {
             MixerKind::Logistic(m) => m.extend_models(total_inputs),
             MixerKind::Lstm(m) => m.extend_models(total_inputs),
-            MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf } => {
+            MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf, ctx_buf } => {
                 let last_end = *group_starts.last().unwrap();
                 if total_inputs > last_end {
                     let new_count = total_inputs - last_end;
@@ -813,6 +827,7 @@ impl ContextMixer {
                     let n_groups = sub_mixers.len();
                     top_lstm.extend_models(n_groups);
                     group_buf.resize(n_groups, 0.5);
+                    let _ = ctx_buf; // ctx_buf size is fixed at BYTE_CTX_DIM
                 }
             }
         }
@@ -838,7 +853,7 @@ impl ContextMixer {
             let prediction = match &mut self.mixer {
                 MixerKind::Logistic(m) => m.predict(c, &self.pred_buf[..total_inputs]),
                 MixerKind::Lstm(m) => m.predict(&self.pred_buf[..total_inputs]),
-                MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf } => {
+                MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf, ctx_buf } => {
                     let n_groups = sub_mixers.len();
                     for g in 0..n_groups {
                         let start = group_starts[g];
@@ -849,7 +864,20 @@ impl ContextMixer {
                             group_buf[g] = 0.5;
                         }
                     }
-                    top_lstm.predict(&group_buf[..n_groups])
+                    // Build byte context: bit position one-hot (8) + last 4 bytes binary (32)
+                    for k in 0..8 {
+                        ctx_buf[k] = if k == j as usize { 1.0 } else { 0.0 };
+                    }
+                    for b in 0..4usize {
+                        let bval = if self.byte_count > b {
+                            self.last_bytes[(self.byte_count - 1 - b) % 4]
+                        } else { 0 };
+                        for bit_k in 0..8 {
+                            ctx_buf[8 + b * 8 + bit_k] =
+                                if (bval >> (7 - bit_k)) & 1 == 1 { 0.5 } else { -0.5 };
+                        }
+                    }
+                    top_lstm.predict_ctx(&group_buf[..n_groups], &ctx_buf[..BYTE_CTX_DIM])
                 }
             };
 
@@ -863,9 +891,9 @@ impl ContextMixer {
             match &mut self.mixer {
                 MixerKind::Logistic(m) => m.update(c, &self.pred_buf[..total_inputs], prediction, bit),
                 MixerKind::Lstm(m) => m.update(&self.pred_buf[..total_inputs], prediction, bit),
-                MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf } => {
+                MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf, ctx_buf } => {
                     let n_groups = sub_mixers.len();
-                    top_lstm.update(&group_buf[..n_groups], prediction, bit);
+                    top_lstm.update_ctx(&group_buf[..n_groups], &ctx_buf[..BYTE_CTX_DIM], prediction, bit);
                     for g in 0..n_groups {
                         let start = group_starts[g];
                         let end = group_starts[g + 1].min(total_inputs);
@@ -888,6 +916,10 @@ impl ContextMixer {
         for model in &mut self.models {
             model.on_byte_done(byte);
         }
+
+        // Update byte context for LSTM enrichment
+        self.last_bytes[self.byte_count % 4] = byte;
+        self.byte_count += 1;
 
         if self.history.len() < self.max_history {
             self.history.push(byte);
@@ -962,6 +994,10 @@ impl ContextMixer {
             }
         }
 
+        // 7. Byte context state (R53)
+        out.extend_from_slice(&self.last_bytes);
+        out.extend_from_slice(&(self.byte_count as u64).to_le_bytes());
+
         out
     }
 
@@ -1001,7 +1037,7 @@ impl ContextMixer {
                 }
             }
             0x03 => {
-                if let MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf } = &mut self.mixer {
+                if let MixerKind::Hierarchical { group_starts, sub_mixers, top_lstm, group_buf, .. } = &mut self.mixer {
                     let n_gs = u32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize;
                     pos += 4;
                     group_starts.clear();
@@ -1068,6 +1104,16 @@ impl ContextMixer {
                 ]) as usize;
                 pos += 8;
             }
+        }
+
+        // 7. Byte context state (R53) — optional for backward compat
+        if pos + 12 <= data.len() {
+            self.last_bytes.copy_from_slice(&data[pos..pos + 4]);
+            pos += 4;
+            self.byte_count = u64::from_le_bytes([
+                data[pos], data[pos+1], data[pos+2], data[pos+3],
+                data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+            ]) as usize;
         }
     }
 }

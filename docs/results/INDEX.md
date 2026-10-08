@@ -72,6 +72,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R50 — T1b/T2b/T3 baselines (100KB)** | **Complete** | **25 files, 12.1h. T2b mean=1.8814 (-0.40 vs 10KB). T3 mean=3.3788. State files saved.** |
 | **R51 — Organic architecture reform** | **Proposal** | **3-layer organic reform + 6 unexplored edges. Phases 0-4. Target: enwik8 ~1.14, T2b ~1.50.** |
 | **R52 — Phase 0 preprocessing** | **KILLED** | **Transforms destroy RWKV predictions. mozilla +4.13, mr +2.39, ooffice +3.04. Incompatible with pre-trained models.** |
+| **R53 — Phase 1 byte-ctx LSTM** | **1.1810** | **BPTT=64 + 40 ctx features (bit pos + last 4 bytes). -0.0033 vs S3. 66.7K params, 111 B/s.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
@@ -93,7 +94,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 1.23  azathoth-lm hierarchical groups (100KB)
 1.22  azathoth-lm hierarchical + match model (100KB)
 1.19  azathoth-lm + emb surgery center0.3 (100KB)
-1.18  azathoth-lm + S1+S2+S3 LSTM stack (100KB) ← CURRENT BEST
+1.18  azathoth-lm + Phase 1 BPTT=64+ctx (100KB) ← CURRENT BEST
 1.27  PAQ8px      (200+ models)
 1.19  NNCP v3     (199M Transformer-XL)
 1.17  cmix        (2077 models + LSTM)
@@ -268,6 +269,7 @@ See `docs/research/r23-cross-domain-validation.md`.
 | + S1 coupled gates | 1.2196 | 1.1955 | 2026-10-06 |
 | + S2 LayerNorm | 1.1686 | 1.1898 | 2026-10-06 |
 | + S3 BPTT=8 + Adam | **1.1669** | **1.1843** | 2026-10-06 |
+| + Phase 1 BPTT=64 + ctx | **1.1666** | **1.1810** | 2026-10-08 |
 
 ## Phase 0 Details
 
