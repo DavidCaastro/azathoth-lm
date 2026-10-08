@@ -2,7 +2,7 @@
 
 **Date**: 2026-10-08
 **Current best (enwik8)**: 1.1810 BPB (100KB, Phase 1 R53)
-**Current composite (T1, 10KB)**: mean=1.4658 | sigma=0.2677 | worst=1.8200 (Phase 1, R53)
+**Current composite (T1, 10KB)**: mean=1.4412 | sigma=0.2574 | worst=1.8184 (Phase 4 E3, R56)
 **Current composite (T2b, 100KB)**: mean=1.8814 | sigma=1.4825 | worst=5.2470 (12 Silesia, pre-Phase 1)
 **Current composite (T3, 100KB)**: mean=3.3788 | sigma=2.5716 | worst=7.9891 (11 modern, pre-Phase 1)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
@@ -162,6 +162,8 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | R53 | Byte-context LSTM (Phase 1) | -0.0033 enwik8 100KB. T1 composite PASS (all 3 ↓). | **DONE** |
 | R54 | Tweedie post-correction (Phase 2) | KILLED: +0.0293 (shrinkage), +0.0789 (calibration). Interferes with mixer. | **KILLED** |
 | R55 | Neural blend (Phase 3) | T1 mean -0.0221, binary -0.0096. Expert pre-blend with RWKV, no new group. | **DONE** |
+| R56 | Order-chain (Phase 4 E3) | T1 mean -0.0247, all 5 domains ↓. Chain order-N → N+1 hash. | **DONE** |
+| R56 | Rank encoding (Phase 4 E4) | Mean +0.010, sigma +0.008. MTF context harms exact matching. | **KILLED** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
@@ -213,7 +215,8 @@ mathematical validation (3x verified per layer), and 11 research sources.
 | **1** | **Byte-context LSTM** (44 floats, BPTT=64) | **CONFIRMED (R53)** | Low | T1 composite gate PASS: mean -0.0016, sigma -0.0353, worst -0.0178. All 3 ↓. |
 | ~~**2**~~ | ~~Tweedie post-correction~~ (2048 buckets, 24 KB) | **KILLED (R54)** | — | Both shrinkage and calibration regress. Second adaptation loop interferes with mixer's online learning. Same root cause as SSE. |
 | **3** | **Neural blend** (44K expert pre-blend with RWKV) | **CONFIRMED (R55)** | Low | T1 composite PASS: mean -0.0221, sigma -0.0005, worst +0.0015. Binary -0.0096. |
-| **4** | **CM order-chain + rank encoding** | -0.01/-0.05 | Experimental | Chained Neural 2026 + MTF. Independent sub-features. |
+| **4** | **CM order-chain** (E3) | **CONFIRMED (R56)** | Low | T1 composite PASS: mean -0.0247, sigma -0.0103, worst -0.0016. All 5 domains ↓. |
+| ~~**4**~~ | ~~Rank-based encoding (E4)~~ | **KILLED (R56)** | — | Mean +0.010, sigma +0.008, worst +0.015. MTF context destroys exact matching at 10KB. |
 
 **Unexplored edges** (E1-E6): byte-plane split, WHT feature expansion,
 CM information inheritance, rank-based encoding, RWKV→uSSM self-distillation,
@@ -230,7 +233,8 @@ Phases are independent — failure of one does not block others.
   ----  ✗ Phase 0 KILLED (preprocessing incompatible with RWKV) — R52
   ----  ✗ Phase 2 KILLED (post-correction fights adaptive mixer) — R54
 1.1666  ✓ Phase 3 CONFIRMED (neural blend, -0.0096 binary) — R55
-1.16    + Phase 4 (CM inheritance + rank encoding)
+1.1633  ✓ Phase 4 E3 CONFIRMED (order-chain, all 5 domains ↓) — R56
+  ----  ✗ Phase 4 E4 KILLED (rank encoding, MTF context harms matching) — R56
 ~1.15   CPU ceiling (enwik8), T2b ~1.50
 <1.0    requires domain-tuned neural model (GPU)
 ```

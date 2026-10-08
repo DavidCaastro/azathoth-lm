@@ -54,6 +54,10 @@ esta vez seria diferente.
   100KB. Root cause: second adaptation loop interferes with mixer's online learning.
   Same fundamental problem as cascaded SSE. Post-correction only viable with
   FIXED (non-adaptive) models or at >10MB with offline-trained lookup tables.
+- Rank-based context encoding (MTF) at 10KB: mean +0.010 (R56). MTF table
+  unstable at small scale, ranks change continuously, exact byte matching lost.
+  Context-space (ranks) vs prediction-space (raw bytes) mismatch. Only viable if
+  prediction target is also rank-encoded (requires architecture change) or >1MB.
 
 ## De edge-lm (Flux WHT, ~2.16 BPB)
 
@@ -134,8 +138,8 @@ esta vez seria diferente.
 ### R51 — Items nuevos (no heredados, descubiertos por investigacion 2024-2026)
 - **uSSM byte-level** (StateSMix/MambaByte): → R51 Phase 3
 - ~~**Adaptive preprocessing**~~ (AIT DCC G2-V3): → R51 Phase 0 → **KILLED R52** (incompatible with pre-trained RWKV)
-- **CM order-chain** (Chained Neural 2026): → R51 Phase 4, arista E3
-- **Rank-based encoding** (MTF sin BWT): → R51 Phase 4, arista E4
+- ~~**CM order-chain**~~ (Chained Neural 2026): → R51 Phase 4, arista E3 → **CONFIRMED R56** (mean -0.0247, all domains ↓)
+- ~~**Rank-based encoding**~~ (MTF sin BWT): → R51 Phase 4, arista E4 → **KILLED R56** (mean +0.010, MTF destroys exact matching at 10KB)
 - **Self-distillation RWKV→uSSM**: → R51 Phase 3, arista E5 (innovacion propia)
 - **Prediction horizon adaptation** (BLT 2025): → R51 arista E6
 

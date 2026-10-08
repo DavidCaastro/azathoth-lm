@@ -416,6 +416,31 @@ Projected                           Actual
 - **Throughput**: negligible impact (expert ~0.1% of RWKV cost).
 - See `docs/research/r55-phase3-neural-blend.md`.
 
+### R56: Phase 4 — CM Order-Chain (E3) — CONFIRMED
+
+- **Approach**: Feed order-N's stretch(p) as quantized hash context to order-N+1.
+  4-bin quantization of lower-order logit mixed into FNV hash. Higher-order models
+  effectively "specialize" based on lower-order confidence.
+- **T1 Composite Gate (10KB, 5 files)**:
+  - mean: 1.4412 (-0.0247) — **DOWN**
+  - sigma: 0.2574 (-0.0103) — **DOWN**
+  - worst: 1.8184 (-0.0016) — **DOWN**
+  - **All three criteria satisfied — PASS.**
+- **Per-domain**: ALL 5 domains improved. enwik8 -0.0033, dickens -0.0022,
+  samba -0.0013, mozilla -0.0150 (strongest), OEIS -0.0016.
+- **Zero new parameters, zero new memory**: chain encoded in hash function.
+- **CLI**: `--order-chain` flag.
+- See `docs/research/r56-phase4-order-chain-rank-encoding.md`.
+
+### R56: Phase 4 — Rank Encoding (E4) — KILLED
+
+- **Approach**: MTF (Move-To-Front) encoding on history bytes. Store frequency
+  rank instead of raw byte as CM context.
+- **Result**: mean +0.0098, sigma +0.0082, worst +0.0146. All three criteria FAIL.
+- **Root cause**: MTF is unstable at 10KB — ranks change continuously, destroying
+  exact byte matching. Context-space (ranks) vs prediction-space (raw bytes) mismatch.
+- Code removed (zero dead code policy).
+
 ### CLI Defaults Change
 
 - `--hierarchical`, `--match`, `--emb-surgery center0.3` now ON by default.
@@ -450,3 +475,5 @@ Projected                           Actual
 | R52 Adaptive preprocessing | +4.13 mozilla | Transforms destroy RWKV pre-trained predictions |
 | R54 Tweedie post-correction | +0.0293 to +0.0789 | Second adaptation loop fights mixer's online learning |
 | R55 Neural blend (Phase 3) | **-0.0221 mean** | **CONFIRMED: expert pre-blend with RWKV, T1 composite PASS** |
+| R56 Order-chain (Phase 4 E3) | **-0.0247 mean** | **CONFIRMED: chain order-N → N+1 hash, all 5 domains ↓** |
+| R56 Rank encoding (Phase 4 E4) | +0.0098 mean | MTF context destroys exact matching at 10KB |

@@ -44,7 +44,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N] [--e8e9]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--no-hierarchical] [--no-match] [--no-emb-surgery] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--expert] [--expert-lr F] [--neural-blend] [--blend-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--no-hierarchical] [--no-match] [--no-emb-surgery] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--expert] [--expert-lr F] [--neural-blend] [--blend-lr F] [--order-chain] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -415,7 +415,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut use_e8e9 = false;
     let mut save_state_path: Option<String> = None;
     let mut preprocess_arg: Option<String> = None;
-
+    let mut order_chain = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -441,6 +441,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--e8e9" => { use_e8e9 = true; }
             "--preprocess" => { i += 1; preprocess_arg = Some(args[i].clone()); }
             "--save-state" => { i += 1; save_state_path = Some(args[i].clone()); }
+            "--order-chain" => { order_chain = true; }
             _ => {}
         }
         i += 1;
@@ -522,6 +523,9 @@ fn cmd_hybrid_eval(args: &[String]) {
     } else {
         ContextMixer::new()
     };
+    if order_chain {
+        cm.set_chain_orders(true);
+    }
     let mut bridge = ByteBridge::new(&tokenizer);
     let cm_mem_mb = cm.memory_bytes() as f64 / (1024.0 * 1024.0);
     let mixer_params = cm.mixer_param_count();
@@ -543,11 +547,12 @@ fn cmd_hybrid_eval(args: &[String]) {
     let blend_str = if let Some(ref be) = blend_expert {
         format!(" | blend: {}params, blend_lr={}", be.param_count(), blend_lr)
     } else { String::new() };
-    eprintln!("[hybrid] CM: {} models, {:.1} MB | mixer: {} | trie: {} nodes{}{}{}",
+    let chain_str = if order_chain { " | order-chain" } else { "" };
+    eprintln!("[hybrid] CM: {} models, {:.1} MB | mixer: {} | trie: {} nodes{}{}{}{}",
               cm.n_models(),
               cm_mem_mb, mixer_str, bridge.node_count(),
               if use_match { format!(" | match: {:.1} MB", match_mem_mb) } else { String::new() },
-              expert_str, blend_str);
+              expert_str, blend_str, chain_str);
 
     let mut logger = log_path.as_ref().map(|p| HybridLogger::new(p, total_bytes));
 

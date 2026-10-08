@@ -39,6 +39,16 @@ fn squash(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
+/// Quantize logit to 4 bins for order-chain hash context.
+/// Bins: [-inf,-1), [-1,0), [0,1), [1,+inf)
+#[inline]
+fn quantize_logit(x: f32) -> u8 {
+    if x < -1.0 { 0 }
+    else if x < 0.0 { 1 }
+    else if x < 1.0 { 2 }
+    else { 3 }
+}
+
 // --- Hash table slot ---
 
 // Scaled u16 counters: each observation adds SCALE counts.
@@ -209,6 +219,40 @@ impl OrderModel {
             return;
         }
         let (idx, cksum) = self.hash_context(history, history_len, max_history, c);
+        table_update(&mut self.table, idx, cksum, bit, self.decay);
+    }
+
+    /// Hash context with chain input from lower-order model.
+    fn hash_context_chained(&self, history: &[u8], history_len: usize, max_history: usize, c: u16, chain_logit: f32) -> (usize, u16) {
+        let mut hash = FNV_OFFSET;
+        hash = fnv_hash_byte(hash, 0x43); // 'C' tag for Chain
+        hash = fnv_hash_byte(hash, quantize_logit(chain_logit));
+        for i in 0..self.order {
+            let idx = if history_len <= max_history {
+                history_len - self.order + i
+            } else {
+                (history_len - self.order + i) % max_history
+            };
+            hash = fnv_hash_byte(hash, history[idx]);
+        }
+        hash = fnv_hash_byte(hash, c as u8);
+        hash = fnv_hash_byte(hash, (c >> 8) as u8);
+        fnv_finish(hash, self.mask)
+    }
+
+    fn predict_chained(&self, history: &[u8], history_len: usize, max_history: usize, c: u16, chain_logit: f32) -> f32 {
+        if history_len < self.order {
+            return 0.5;
+        }
+        let (idx, cksum) = self.hash_context_chained(history, history_len, max_history, c, chain_logit);
+        table_predict(&self.table, idx, cksum)
+    }
+
+    fn update_chained(&mut self, history: &[u8], history_len: usize, max_history: usize, c: u16, bit: u8, chain_logit: f32) {
+        if history_len < self.order {
+            return;
+        }
+        let (idx, cksum) = self.hash_context_chained(history, history_len, max_history, c, chain_logit);
         table_update(&mut self.table, idx, cksum, bit, self.decay);
     }
 }
@@ -616,6 +660,8 @@ pub struct ContextMixer {
     // Byte context for LSTM enrichment (Phase 1, R53)
     last_bytes: [u8; 4],
     byte_count: usize,
+    // Order-chain: feed order-N's prediction to order-N+1's hash (Phase 4, R56)
+    chain_orders: bool,
 }
 
 // Sparse model offset tables (static lifetime).
@@ -681,6 +727,7 @@ impl ContextMixer {
             pred_buf: vec![0.0f32; n_models],
             last_bytes: [0u8; 4],
             byte_count: 0,
+            chain_orders: false,
         }
     }
 
@@ -698,6 +745,7 @@ impl ContextMixer {
             pred_buf: vec![0.0f32; n_models],
             last_bytes: [0u8; 4],
             byte_count: 0,
+            chain_orders: false,
         }
     }
 
@@ -730,7 +778,13 @@ impl ContextMixer {
             pred_buf: vec![0.0f32; Self::N_MODELS],
             last_bytes: [0u8; 4],
             byte_count: 0,
+            chain_orders: false,
         }
+    }
+
+    /// Enable order-chain: feed order-N's prediction to order-N+1's hash (R56).
+    pub fn set_chain_orders(&mut self, enable: bool) {
+        self.chain_orders = enable;
     }
 
     /// Total memory used by hash tables (bytes).
@@ -786,8 +840,42 @@ impl ContextMixer {
         let mut c: u16 = 1;
         for j in 0..8u8 {
             let bit = (byte >> (7 - j)) & 1;
-            for model in &mut self.models {
-                model.update(&self.history, self.history_len, self.max_history, c, bit);
+
+            if self.chain_orders {
+                // Order models: predict sequentially to get chain logits, then update with chain
+                let mut chain_logit = 0.0f32;
+                for i in 0..Self::N_ORDER {
+                    let p = match &self.models[i] {
+                        ContextModel::Order(om) => {
+                            if i == 0 {
+                                om.predict(&self.history, self.history_len, self.max_history, c)
+                            } else {
+                                om.predict_chained(&self.history, self.history_len, self.max_history, c, chain_logit)
+                            }
+                        }
+                        _ => 0.5,
+                    };
+                    let prev_chain = chain_logit;
+                    chain_logit = stretch(p);
+                    match &mut self.models[i] {
+                        ContextModel::Order(om) => {
+                            if i == 0 {
+                                om.update(&self.history, self.history_len, self.max_history, c, bit);
+                            } else {
+                                om.update_chained(&self.history, self.history_len, self.max_history, c, bit, prev_chain);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Non-order models: update normally
+                for model in &mut self.models[Self::N_ORDER..] {
+                    model.update(&self.history, self.history_len, self.max_history, c, bit);
+                }
+            } else {
+                for model in &mut self.models {
+                    model.update(&self.history, self.history_len, self.max_history, c, bit);
+                }
             }
             c = (c << 1) | bit as u16;
         }
@@ -839,9 +927,35 @@ impl ContextMixer {
             let bit = (byte >> (7 - j)) & 1;
 
             // Collect predictions from all CM models
-            for (i, model) in self.models.iter().enumerate() {
-                self.pred_buf[i] =
-                    model.predict(&self.history, self.history_len, self.max_history, c);
+            let mut chain_logits_saved = [0.0f32; Self::N_ORDER];
+            if self.chain_orders {
+                // Order models: predict sequentially with chain input
+                let mut chain_logit = 0.0f32;
+                for i in 0..Self::N_ORDER {
+                    let p = match &self.models[i] {
+                        ContextModel::Order(om) => {
+                            if i == 0 {
+                                om.predict(&self.history, self.history_len, self.max_history, c)
+                            } else {
+                                om.predict_chained(&self.history, self.history_len, self.max_history, c, chain_logit)
+                            }
+                        }
+                        _ => 0.5,
+                    };
+                    chain_logits_saved[i] = chain_logit;
+                    chain_logit = stretch(p);
+                    self.pred_buf[i] = p;
+                }
+                // Non-order models: predict independently
+                for i in Self::N_ORDER..n_cm {
+                    self.pred_buf[i] =
+                        self.models[i].predict(&self.history, self.history_len, self.max_history, c);
+                }
+            } else {
+                for (i, model) in self.models.iter().enumerate() {
+                    self.pred_buf[i] =
+                        model.predict(&self.history, self.history_len, self.max_history, c);
+                }
             }
 
             // Append external predictions if provided
@@ -905,8 +1019,26 @@ impl ContextMixer {
             }
 
             // Update all CM models
-            for model in &mut self.models {
-                model.update(&self.history, self.history_len, self.max_history, c, bit);
+            if self.chain_orders {
+                for i in 0..Self::N_ORDER {
+                    match &mut self.models[i] {
+                        ContextModel::Order(om) => {
+                            if i == 0 {
+                                om.update(&self.history, self.history_len, self.max_history, c, bit);
+                            } else {
+                                om.update_chained(&self.history, self.history_len, self.max_history, c, bit, chain_logits_saved[i]);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                for model in &mut self.models[Self::N_ORDER..] {
+                    model.update(&self.history, self.history_len, self.max_history, c, bit);
+                }
+            } else {
+                for model in &mut self.models {
+                    model.update(&self.history, self.history_len, self.max_history, c, bit);
+                }
             }
 
             c = (c << 1) | bit as u16;
