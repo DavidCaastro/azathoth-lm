@@ -336,6 +336,56 @@ Projected                           Actual
 
 ---
 
+## R51 Organic Reform — Implementation (2026-10-08)
+
+### R52: Phase 0 — Adaptive Preprocessing — KILLED
+
+- **Transforms**: delta (stride 1/2/4/8), byte-plane split (stride 2/4/8), auto-detect
+- **Auto-detection**: 8KB entropy sample, threshold 0.15 bits/byte, zero false positives on text
+- **Result**: CATASTROPHIC on hybrid mode. Pre-trained RWKV sees transformed data
+  as out-of-distribution → confident wrong predictions.
+  - mozilla: 1.14 → 5.26 BPB (+4.13)
+  - mr: 1.42 → 3.81 BPB (+2.39)
+  - ooffice: 2.93 → 5.97 BPB (+3.04)
+  - All text files: identity (neutral, correct)
+- **Root cause**: Preprocessing only viable when ALL predictors are online-adaptive.
+  Pre-trained models learn priors from original data distribution; transforms
+  create anti-priors. Exception: E8/E9 works because it touches <1% of bytes.
+- **Code retained**: E8/E9 still used, `--preprocess` flag available.
+- See `docs/research/r52-adaptive-preprocessing-phase0.md`.
+
+### R53: Phase 1 — Byte-Context LSTM — CONFIRMED
+
+- **Changes**: BPTT 8→64 (8 bytes temporal), 40 context features (bit position
+  one-hot + last 4 decoded bytes as binary), context separation in LSTM
+  (model probs get mixing weights, context enriches hidden state only).
+- **Result (enwik8 100KB)**: 1.1810 BPB (-0.0033 vs S3 baseline 1.1843)
+- **T1 Composite Gate (10KB, 5 files)**:
+  - mean: 1.4658 (-0.0016) ✓
+  - sigma: 0.2677 (-0.0353) ✓
+  - worst: 1.8200 (-0.0178) ✓
+  - **All three criteria improved — PASS.**
+- **LR tuning**: 0.002 optimal. Higher (0.004-0.008) all worse.
+- **Throughput**: -19% to -25% (40-92 B/s vs 40-133 B/s baseline).
+- **Parameters**: 66,690 (vs 51,330 baseline), +15K for context features.
+- **Key insight**: BPTT=64 converges slower (8x fewer Adam updates) but to
+  a better minimum. Crossover at ~60-70KB on enwik8.
+- **Structural difference from B2 (KILLED)**: B2 tested BPTT=16/32 with same
+  4-float input → zero benefit. R53 adds 40 NEW features, making longer
+  temporal context meaningful.
+- See `docs/research/r53-phase1-byte-context-lstm.md`.
+
+### CLI Defaults Change
+
+- `--hierarchical`, `--match`, `--emb-surgery center0.3` now ON by default.
+- Use `--no-hierarchical`, `--no-match`, `--no-emb-surgery` to disable.
+- **Root cause**: During R53 T1 eval, flags were accidentally omitted,
+  producing false catastrophic results (+0.88 on mozilla) that almost killed
+  Phase 1. Making full pipeline the default eliminates this error class.
+- Minimal valid command: `cargo run --release -- hybrid-eval --weights weights/rwkv7-0.1b --bytes N --input PATH`
+
+---
+
 ## Killed Approaches (full list)
 
 | Approach | Result | Root cause |
@@ -356,3 +406,4 @@ Projected                           Actual
 | B2 BPTT=16/32 bits (R41) | +0.0000/+0.0020 | Bit-level ceiling, same info |
 | B4 Higher-order CM (R42) | +0.0004 | Redundant with RWKV |
 | C1 Online LSTM expert (R44) | +0.0127 | Mixer group overhead > prediction value |
+| R52 Adaptive preprocessing | +4.13 mozilla | Transforms destroy RWKV pre-trained predictions |

@@ -1,10 +1,10 @@
 # Roadmap — azathoth-lm
 
 **Date**: 2026-10-08
-**Current best (enwik8)**: 1.1852 BPB (100KB, literature ref only)
-**Current composite (T1b, 100KB)**: enwik8=1.1852, OEIS=2.5353
-**Current composite (T2b, 100KB)**: mean=1.8814 | sigma=1.4825 | worst=5.2470 (12 Silesia files)
-**Current composite (T3, 100KB)**: mean=3.3788 | sigma=2.5716 | worst=7.9891 (11 modern files)
+**Current best (enwik8)**: 1.1810 BPB (100KB, Phase 1 R53)
+**Current composite (T1, 10KB)**: mean=1.4658 | sigma=0.2677 | worst=1.8200 (Phase 1, R53)
+**Current composite (T2b, 100KB)**: mean=1.8814 | sigma=1.4825 | worst=5.2470 (12 Silesia, pre-Phase 1)
+**Current composite (T3, 100KB)**: mean=3.3788 | sigma=2.5716 | worst=7.9891 (11 modern, pre-Phase 1)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
 **Primary metric**: Composite BPB (mean, sigma, worst) — see R28
 
@@ -23,7 +23,7 @@ Principles:
 ## Current Position
 
 ```
-1.18  azathoth-lm   (0.1B RWKV + 14 CM + match + hier LSTM BPTT=8 + emb surgery)
+1.18  azathoth-lm   (0.1B RWKV + 14 CM + match + hier LSTM BPTT=64+ctx + emb surgery)
 1.27  PAQ8px v217   (200+ byte-level CM, 3-layer mixer, universal)
 1.19  NNCP v3       (199M Transformer-XL)
 1.17  cmix v21      (2077 CM + 2x200 LSTM BPTT=100, universal)
@@ -42,29 +42,30 @@ Input bytes
     ├─→ CM orders 0-2 + word → logistic sub-mixer → Group 0 (short ctx)
     ├─→ CM orders 3-8 + sparse + ICM + word → logistic sub-mixer → Group 1 (long ctx)
     ├─→ MatchModel (ctx 4-128) → bit preds (Group 3: match)
-    └──────────── Top LSTM (H=128, 51K params, BPTT=8, coupled, LN, Adam) → final P(bit=1)
+    ├─→ Byte context: bit_pos(8) + last_4_bytes(32) = 40 features
+    └──────────── Top LSTM (H=128, 67K params, BPTT=64, coupled, LN, Adam, +40 ctx) → final P(bit=1)
 ```
 
-### Key Gap vs Competition (R34 + Tier A/B findings)
+### Key Gap vs Competition (R34 + Tier A/B + R51/R53 findings)
 
-The LSTM mixer gap (R34) has been **partially closed**: coupled gates, LayerNorm,
-BPTT=8, Adam optimizer are all implemented (S1-S3). Remaining gap vs cmix is
-primarily **data scale** (100KB vs 100MB) and **byte-level BPTT** (cmix: 100 bytes
-= 800 bits, ours: 8 bits). All incremental improvements (Tier A+B) tested and
-found neutral at 100KB — architecture is at a local minimum at this scale.
+The LSTM mixer gap (R34) has been **substantially closed**: coupled gates, LayerNorm,
+BPTT=64, Adam optimizer, byte context enrichment (40 features) all implemented
+(S1-S3 + R53). Remaining gap vs cmix: **data scale** (100KB vs 100MB) and
+**BPTT length** (cmix: 100 bytes = 800 bits, ours: 64 bits = 8 bytes).
+Phase 1 (R53) confirmed: byte context + BPTT=64 passes T1 composite gate.
 
-### Composite Baseline (Tier 1, 10KB each, FINAL post-all-tiers 2026-10-07)
+### Composite (Tier 1, 10KB each, Phase 1 R53, 2026-10-08)
 
-| File | Type | BPB | B/s |
-|---|---|---|---|
-| samba | Code | 1.1445 | 105 |
-| enwik8 | Text EN | 1.1680 | 114 |
-| dickens | Text EN | 1.5465 | 133 |
-| mozilla | Binary | 1.6404 | 46 |
-| OEIS | Numerical | 1.8378 | 40 |
-| **mean** | | **1.4674** | |
-| **sigma** | | **0.3030** | |
-| **worst** | | **1.8378** | |
+| File | Type | BPB (Phase 1) | BPB (S3 baseline) | Delta | B/s |
+|---|---|---|---|---|---|
+| samba | Code | 1.1481 | 1.1445 | +0.0036 | ~90 |
+| enwik8 | Text EN | **1.1666** | 1.1680 | **-0.0014** | 92 |
+| dickens | Text EN | **1.5346** | 1.5465 | **-0.0119** | ~65 |
+| mozilla | Binary | 1.6599 | 1.6404 | +0.0195 | 40 |
+| OEIS | Numerical | **1.8200** | 1.8378 | **-0.0178** | 44 |
+| **mean** | | **1.4658** | 1.4674 | **-0.0016** | |
+| **sigma** | | **0.2677** | 0.3030 | **-0.0353** | |
+| **worst** | | **1.8200** | 1.8378 | **-0.0178** | |
 
 ## What's Next
 
@@ -157,6 +158,9 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 | C2 | Information inheritance | Redundant with mixer. Killed by analysis. | **KILLED** |
 | C3 | Modality-routing | Violates no-domain-detection. Killed by analysis. | **KILLED** |
 
+| R52 | Adaptive preprocessing (Phase 0) | KILLED: +4.13 mozilla. Incompatible with RWKV. | **KILLED** |
+| R53 | Byte-context LSTM (Phase 1) | -0.0033 enwik8 100KB. T1 composite PASS (all 3 ↓). | **DONE** |
+
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
 ## Remaining Trajectory (enwik8, from 1.1852)
@@ -203,8 +207,8 @@ mathematical validation (3x verified per layer), and 11 research sources.
 
 | Phase | Action | Est. Delta | Risk | Rationale |
 |---|---|---|---|---|
-| **0** | **Adaptive preprocessing** (delta + byte-plane split) | OEIS -0.3/-0.7, ait-E -2.0/-4.0 | None | AIT DCC G2-V3 proven. Transparent to mixer. Subsumes N4. |
-| **1** | **Byte-context LSTM** (44 floats, BPTT=64) + WHT features | -0.01/-0.03 text, -0.05 binary | Low | cmix/RATA-CMIX standard. Structurally different from killed B2 (enriched input, not just more steps). |
+| ~~**0**~~ | ~~Adaptive preprocessing (delta + byte-plane split)~~ | **KILLED (R52)** | — | Transforms destroy RWKV predictions. Incompatible with pre-trained models. |
+| **1** | **Byte-context LSTM** (44 floats, BPTT=64) | **CONFIRMED (R53)** | Low | T1 composite gate PASS: mean -0.0016, sigma -0.0353, worst -0.0178. All 3 ↓. |
 | **2** | **Tweedie post-correction** (2048 buckets, 24 KB) | -0.01/-0.03, Cluster C/D | Low | Midicoth proven. Math-guaranteed (Stein dominance). Not SSE (no cascade, no separate LR). |
 | **3** | **uSSM byte-level** (D=32, L=2, ~50K params) pre-blend with RWKV | neutral text, -0.1/-0.3 binary >1MB | Medium | StateSMix 2.123 BPB from scratch. Pre-blended in Group 2 (no new mixer group). |
 | **4** | **CM order-chain + rank encoding** | -0.01/-0.05 | Experimental | Chained Neural 2026 + MTF. Independent sub-features. |
@@ -219,12 +223,12 @@ Phases are independent — failure of one does not block others.
 ### Projected path forward
 
 ```
-1.1852  current (post all optimization series + R50 baselines)
-1.1852  + Phase 0 (preprocessing — neutral on enwik8, T2b -0.13)
-1.17    + Phase 1 (byte-context LSTM, BPTT=64)
-1.16    + Phase 2 (Tweedie post-correction)
-1.15    + Phase 3 (uSSM byte-level, binary improvement)
-1.14    + Phase 4 (CM inheritance + rank encoding)
+1.1843  S3 baseline (post all optimization series)
+1.1810  ✓ Phase 1 CONFIRMED (byte-context LSTM, BPTT=64) — R53
+  ----  ✗ Phase 0 KILLED (preprocessing incompatible with RWKV) — R52
+1.17    + Phase 2 (Tweedie post-correction)
+1.16    + Phase 3 (uSSM byte-level, binary improvement)
+1.15    + Phase 4 (CM inheritance + rank encoding)
 ~1.14   CPU ceiling (enwik8), T2b ~1.50
 <1.0    requires domain-tuned neural model (GPU)
 ```
