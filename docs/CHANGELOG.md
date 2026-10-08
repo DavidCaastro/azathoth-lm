@@ -375,6 +375,28 @@ Projected                           Actual
   temporal context meaningful.
 - See `docs/research/r53-phase1-byte-context-lstm.md`.
 
+### R54: Phase 2 — Tweedie Post-Correction — KILLED
+
+- **Approach 1 (Tweedie shrinkage)**: Track per-context (bit_pos × last_byte = 2048
+  buckets) mean/variance of mixer logits. Shrink toward context mean using James-Stein.
+  - MIN_COUNT=8: enwik8 1.1959 (+0.0293)
+  - MIN_COUNT=64: enwik8 1.1767 (+0.0101)
+  - MIN_COUNT=1000: enwik8 1.1676 (+0.0010, near no-op)
+- **Approach 2 (bias calibration)**: Track EMA(prediction - actual_bit) per context.
+  Subtract bias to correct systematic over/under-prediction.
+  - 10KB: 1.2455 (+0.0789) — 1.8154 before gradient isolation fix
+  - 100KB with 10KB warmup: 1.2305 (+0.0453 vs 1.1852 baseline)
+- **Critical bug found and fixed**: Initially passed corrected prediction to mixer
+  update, contaminating LSTM gradients. After fix, regression reduced but still present.
+- **Root cause**: The LSTM mixer is online-adaptive — it corrects its own biases via
+  gradient descent. Adding ANY post-correction (shrinkage, calibration, SSE, APM)
+  creates a second adaptation loop that interferes with the first. James-Stein
+  assumptions (independent observations, fixed parameters) are violated. This is the
+  generalized form of "cascaded SSE overcorrects" — even single-stage correction
+  harms an already-adapting system.
+- **Code deleted**: Module removed (zero dead code policy).
+- See `docs/research/r54-phase2-tweedie-postcorrection.md`.
+
 ### CLI Defaults Change
 
 - `--hierarchical`, `--match`, `--emb-surgery center0.3` now ON by default.
@@ -407,3 +429,4 @@ Projected                           Actual
 | B4 Higher-order CM (R42) | +0.0004 | Redundant with RWKV |
 | C1 Online LSTM expert (R44) | +0.0127 | Mixer group overhead > prediction value |
 | R52 Adaptive preprocessing | +4.13 mozilla | Transforms destroy RWKV pre-trained predictions |
+| R54 Tweedie post-correction | +0.0293 to +0.0789 | Second adaptation loop fights mixer's online learning |

@@ -48,6 +48,12 @@ esta vez seria diferente.
   eval uses a flat mixer (~1.62 BPB on enwik8 vs 1.17 with full pipeline).
   Incident: 2026-10-08, T1 eval without flags showed false +0.88 regression
   on mozilla, wasted 1h on a false Phase 1 kill before discovering the error.
+- Tweedie/bias post-correction on adaptive mixer: ALWAYS REGRESSES (R54).
+  Tested both logit-shrinkage (James-Stein) and bias-calibration (EMA residual).
+  Best case +0.0010 BPB at 10KB (near no-op), worst +0.0789 at 10KB, +0.0453 at
+  100KB. Root cause: second adaptation loop interferes with mixer's online learning.
+  Same fundamental problem as cascaded SSE. Post-correction only viable with
+  FIXED (non-adaptive) models or at >10MB with offline-trained lookup tables.
 
 ## De edge-lm (Flux WHT, ~2.16 BPB)
 
@@ -93,12 +99,12 @@ esta vez seria diferente.
 
 ### Tier 2 — Tecnicas de ecosistema
 - **Logit-bias mixing**: mezclar logits en lugar de probabilidades (AIT 2026)
-- ~~**Micro-diffusion denoising**~~: → **R51 Phase 2** (Tweedie post-correction, Midicoth)
+- ~~**Micro-diffusion denoising**~~: → **KILLED R54** (Tweedie/bias post-correction fights adaptive mixer)
 - ~~**Confidence skip**~~: KILLED (R44, P1.4). RWKV=97% compute, no skippable.
 - **Geometric byte-level mixing**: ponderacion geometrica entre predictores
 
 ### Tier 3 — Tecnicas granulares
-- ~~**Diverse SSE contexts**~~ (R22): → R51 Phase 2 (Tweedie reemplaza SSE sin feedback loops)
+- ~~**Diverse SSE contexts**~~ (R22): → **KILLED R54** (all post-correction fights adaptive mixer)
 - **Sparse word contexts** (R22): (w0,w2), (w0,w3), est. -0.02 a -0.03
 - **Composite hashes**: combinar hash de match length + recency + position
 - **MatchTrust register**: confianza acumulada por modelo de match
@@ -113,8 +119,10 @@ esta vez seria diferente.
 - **WordByteDistModel memory dominance**: modelo mas costoso en memoria, candidato a poda
 
 ### Tier 6 — Root causes documentados
-- **Why SSE overcorrects**: reuso de contextos entre stages causa feedback loop
-  → R51 Phase 2 (Tweedie) resuelve esto sin cascading
+- **Why SSE/Tweedie/ALL post-correction fails**: ANY second adaptation loop on top
+  of an online-adaptive mixer creates interference. SSE cascades, Tweedie shrinkage,
+  and bias calibration ALL regress (R54 tested all). The mixer IS the calibration.
+  Root cause is NOT cascade — it's adding ANY correction to an already-adapting system.
 - **Why LZ match fails at bit-level**: bit-alignment destruye match boundaries
 - **Linear mixer ceiling**: provado que lineal no captura interacciones entre modelos
 

@@ -74,6 +74,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R52 — Phase 0 preprocessing** | **KILLED** | **Transforms destroy RWKV predictions. mozilla +4.13, mr +2.39, ooffice +3.04. Incompatible with pre-trained models.** |
 | **R53 — Phase 1 byte-ctx LSTM (enwik8 100KB)** | **1.1810** | **BPTT=64 + 40 ctx features. -0.0033 vs S3. 66.7K params, 111 B/s.** |
 | **R53 — Phase 1 T1 composite (10KB)** | **PASS** | **mean=1.4658 (-0.0016), sigma=0.2677 (-0.0353), worst=1.8200 (-0.0178). All 3 ↓.** |
+| **R54 — Phase 2 Tweedie post-correction** | **KILLED** | **Shrinkage: +0.0293 (10KB). Calibration: +0.0789 (10KB), +0.0453 (100KB). Fights adaptive mixer.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).

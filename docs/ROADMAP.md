@@ -160,6 +160,7 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 
 | R52 | Adaptive preprocessing (Phase 0) | KILLED: +4.13 mozilla. Incompatible with RWKV. | **KILLED** |
 | R53 | Byte-context LSTM (Phase 1) | -0.0033 enwik8 100KB. T1 composite PASS (all 3 ↓). | **DONE** |
+| R54 | Tweedie post-correction (Phase 2) | KILLED: +0.0293 (shrinkage), +0.0789 (calibration). Interferes with mixer. | **KILLED** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
@@ -199,7 +200,7 @@ R50 (25-file, 100KB baselines) + ecosystem research (2024-2026) revealed that
 our gap vs SOTA is **integration, not models**:
 - BPTT=8 bits vs cmix's 128 (16x gap)
 - Mixer blind to actual bytes (only sees 4 group logits)
-- No post-correction (Tweedie denoising proven in Midicoth)
+- No post-correction (Tweedie proposed but KILLED R54 — see below)
 
 **The old Tier N items (N4, N5, N6) are subsumed by R51's phased organic reform.**
 See `docs/research/r51-organic-architecture-reform.md` for full analysis,
@@ -209,7 +210,7 @@ mathematical validation (3x verified per layer), and 11 research sources.
 |---|---|---|---|---|
 | ~~**0**~~ | ~~Adaptive preprocessing (delta + byte-plane split)~~ | **KILLED (R52)** | — | Transforms destroy RWKV predictions. Incompatible with pre-trained models. |
 | **1** | **Byte-context LSTM** (44 floats, BPTT=64) | **CONFIRMED (R53)** | Low | T1 composite gate PASS: mean -0.0016, sigma -0.0353, worst -0.0178. All 3 ↓. |
-| **2** | **Tweedie post-correction** (2048 buckets, 24 KB) | -0.01/-0.03, Cluster C/D | Low | Midicoth proven. Math-guaranteed (Stein dominance). Not SSE (no cascade, no separate LR). |
+| ~~**2**~~ | ~~Tweedie post-correction~~ (2048 buckets, 24 KB) | **KILLED (R54)** | — | Both shrinkage and calibration regress. Second adaptation loop interferes with mixer's online learning. Same root cause as SSE. |
 | **3** | **uSSM byte-level** (D=32, L=2, ~50K params) pre-blend with RWKV | neutral text, -0.1/-0.3 binary >1MB | Medium | StateSMix 2.123 BPB from scratch. Pre-blended in Group 2 (no new mixer group). |
 | **4** | **CM order-chain + rank encoding** | -0.01/-0.05 | Experimental | Chained Neural 2026 + MTF. Independent sub-features. |
 
@@ -226,10 +227,10 @@ Phases are independent — failure of one does not block others.
 1.1843  S3 baseline (post all optimization series)
 1.1810  ✓ Phase 1 CONFIRMED (byte-context LSTM, BPTT=64) — R53
   ----  ✗ Phase 0 KILLED (preprocessing incompatible with RWKV) — R52
-1.17    + Phase 2 (Tweedie post-correction)
-1.16    + Phase 3 (uSSM byte-level, binary improvement)
-1.15    + Phase 4 (CM inheritance + rank encoding)
-~1.14   CPU ceiling (enwik8), T2b ~1.50
+  ----  ✗ Phase 2 KILLED (post-correction fights adaptive mixer) — R54
+1.17    + Phase 3 (uSSM byte-level, binary improvement)
+1.16    + Phase 4 (CM inheritance + rank encoding)
+~1.15   CPU ceiling (enwik8), T2b ~1.50
 <1.0    requires domain-tuned neural model (GPU)
 ```
 
