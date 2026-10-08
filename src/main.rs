@@ -13,7 +13,7 @@ use crate::domain::cm::ContextMixer;
 use crate::domain::bridge::{ByteBridge, byte_probs_to_bit_preds};
 use crate::domain::match_model::MatchModel;
 use crate::domain::lstm_expert::LstmExpert;
-use crate::domain::preprocess;
+use crate::domain::preprocess::{self, Transform};
 use crate::application::telemetry::{ProgressTracker, JsonLogger, LogSnapshot, HybridLogger, HybridLogSnapshot};
 use crate::infrastructure::rwkv7::model::{Rwkv7Config, Rwkv7Model, Rwkv7State};
 use crate::infrastructure::rwkv7::tokenizer::WorldTokenizer;
@@ -44,7 +44,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N] [--e8e9]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--match] [--expert] [--expert-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--save-state PATH]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--lstm] [--hierarchical] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--match] [--expert] [--expert-lr F] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -412,6 +412,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut emb_surgery: Option<String> = None;
     let mut use_e8e9 = false;
     let mut save_state_path: Option<String> = None;
+    let mut preprocess_arg: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -431,16 +432,17 @@ fn cmd_hybrid_eval(args: &[String]) {
             "--log" => { i += 1; log_path = Some(args[i].clone()); }
             "--emb-surgery" => { i += 1; emb_surgery = Some(args[i].clone()); }
             "--e8e9" => { use_e8e9 = true; }
+            "--preprocess" => { i += 1; preprocess_arg = Some(args[i].clone()); }
             "--save-state" => { i += 1; save_state_path = Some(args[i].clone()); }
             _ => {}
         }
         i += 1;
     }
 
-    // Load input — transform full file for E8/E9, then slice for eval
+    // Load input — apply transforms: E8/E9 first, then adaptive preprocess
     let raw_bytes = std::fs::read(&input_path)
         .unwrap_or_else(|e| panic!("cannot read {}: {}", input_path, e));
-    let (eval_bytes, e8e9_applied) = if use_e8e9 {
+    let (after_e8e9, e8e9_applied) = if use_e8e9 {
         let (full_transformed, stats) = preprocess::e8e9_encode_with_stats(&raw_bytes);
         eprintln!("[hybrid] E8/E9 transform (full file {} bytes): {} E8 + {} E9, {} transformed, {} skipped",
                   raw_bytes.len(), stats.e8_count, stats.e9_count, stats.transformed, stats.skipped);
@@ -448,11 +450,36 @@ fn cmd_hybrid_eval(args: &[String]) {
     } else {
         (raw_bytes, false)
     };
+
+    // Adaptive preprocessing (after E8/E9, before eval)
+    let (eval_bytes, preprocess_transform) = if let Some(ref arg) = preprocess_arg {
+        match preprocess::parse_transform_arg(arg) {
+            None => {
+                // auto-detect
+                let (transformed, stats) = preprocess::adaptive_encode(&after_e8e9);
+                eprintln!("[hybrid] preprocess auto: {} (raw H={:.2}, best H={:.2}, sample={}B)",
+                          stats.transform, stats.raw_entropy, stats.best_entropy, stats.sample_size);
+                (transformed, stats.transform)
+            }
+            Some(t) => {
+                let transformed = preprocess::apply_transform(&after_e8e9, t);
+                eprintln!("[hybrid] preprocess manual: {}", t);
+                (transformed, t)
+            }
+        }
+    } else {
+        (after_e8e9, Transform::Identity)
+    };
+
     let total_bytes = if max_bytes > 0 { max_bytes.min(eval_bytes.len()) } else { eval_bytes.len() };
     let input_slice = &eval_bytes[..total_bytes];
 
-    eprintln!("[hybrid] input: {} ({} bytes){}", input_path, total_bytes,
-              if e8e9_applied { " [E8/E9 ON]" } else { "" });
+    let mut preprocess_tags = String::new();
+    if e8e9_applied { preprocess_tags.push_str(" [E8/E9]"); }
+    if preprocess_transform != Transform::Identity {
+        preprocess_tags.push_str(&format!(" [{}]", preprocess_transform));
+    }
+    eprintln!("[hybrid] input: {} ({} bytes){}", input_path, total_bytes, preprocess_tags);
 
     // Load tokenizer and model
     let model_path = Path::new(&weights_dir).join("model.safetensors");
