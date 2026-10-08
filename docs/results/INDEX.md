@@ -70,6 +70,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R48 — Benchmark corpus investigation** | Research | **Silesia morphologically outdated. AIT DCC 2026 = best modern alternative. T3 suite designed.** |
 | **R49 — N3 E8/E9 transform** | Mixed | **ooffice -0.1811, mozilla +0.006, text neutral. T2 mean -0.0151. Preprocessing works.** |
 | **R50 — T1b/T2b/T3 baselines (100KB)** | **Complete** | **25 files, 12.1h. T2b mean=1.8814 (-0.40 vs 10KB). T3 mean=3.3788. State files saved.** |
+| **R51 — Organic architecture reform** | **Proposal** | **3-layer organic reform + 6 unexplored edges. Phases 0-4. Target: enwik8 ~1.14, T2b ~1.50.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
