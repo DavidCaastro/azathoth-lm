@@ -1,0 +1,22 @@
+=== C.1 Scale Validation (1MB) ===
+Date: 2026-10-09
+Purpose: Validate R59 convergence projections at 1MB scale
+Command: cargo run --release -- hybrid-eval --input FILE --bytes 1000000 --order-chain
+
+Baselines (10KB, R56 Phase 4 E3):
+  enwik8:   1.1633 BPB
+  dickens:  1.5115 BPB
+  samba:    1.1289 BPB
+  mozilla:  1.6599 BPB
+  OEIS:     1.7424 BPB
+  mean:     1.4412 | sigma: 0.2574 | worst: 1.8184
+
+Baselines (100KB, R53 Phase 1):
+  enwik8:   1.1810 BPB
+
+Results (1MB): IN PROGRESS
+  enwik8:   RUNNING (~2h, task bam43ea85)
+  dickens:  PENDING
+  samba:    PENDING
+  mozilla:  PENDING
+  OEIS:     PENDING
