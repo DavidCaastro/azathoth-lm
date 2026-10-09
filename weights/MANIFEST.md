@@ -81,11 +81,20 @@ NOT for general use — all baselines use `rwkv7-0.1b` (World v2.8).
 
 ### rwkv7-g1k-1.5b (G1k 1.5B)
 
-- **Status**: Future use (requires Q4/Q8 quantization for CPU inference)
-- **Source**: shoumenchougou/RWKV7-G1k-1.5B-GGUF on HuggingFace (GGUF format)
+- **Status**: ACTIVE — second backbone candidate (C.0.4)
+- **Source**: RWKV/RWKV7-G1k-1.5B on HuggingFace
+- **Format**: SafeTensors (native, no conversion needed)
 - **License**: Apache 2.0
+- **Training**: >5T tokens, G1k architecture (improved RWKV-7)
 - **Architecture**: D=2048, L=24, H=32, head_size=64, vocab=65536
+- **SafeTensors size**: 2.9 GB (F32/BF16 mixed)
+- **Tokenizer**: `rwkv_vocab_v20230424.txt` (same as 0.1B)
+- **RAM (F32)**: ~5.7 GB
+- **RAM (Q8 auto)**: ~1.5 GB (auto-quantized at load time)
+- **Baseline BPB**: pending (C.0.4 evaluation)
 - **Date added**: 2026-10-02
+- **Usage**: `--backbone2 weights/rwkv7-g1k-1.5b`
+- **Auto-detection**: `from_weights_dir()` recognizes "1.5b" → config(D=2048, L=24, H=32)
 
 ---
 
