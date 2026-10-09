@@ -477,3 +477,73 @@ Projected                           Actual
 | R55 Neural blend (Phase 3) | **-0.0221 mean** | **CONFIRMED: expert pre-blend with RWKV, T1 composite PASS** |
 | R56 Order-chain (Phase 4 E3) | **-0.0247 mean** | **CONFIRMED: chain order-N → N+1 hash, all 5 domains ↓** |
 | R56 Rank encoding (Phase 4 E4) | +0.0098 mean | MTF context destroys exact matching at 10KB |
+
+---
+
+## Strategic Research & Roadmap Restructure (2026-10-09)
+
+### R57: Strategic Positioning
+
+- **Purpose**: Define azathoth-lm's end goal beyond compression benchmarks.
+- **Key insight**: azathoth-lm is a universal data synthesis core, not a compressor.
+  Compression is the proving ground, NOT the product.
+- **Subproduct**: adaptive inference middleware — sellable NOW.
+- See `docs/research/r57-strategic-positioning.md`.
+
+### R58: Multi-Backbone Inventory
+
+- **Purpose**: Exhaustive inventory of pretrained backbones across ALL domains.
+- **50+ models cataloged** across 12 domain categories.
+- **Key discovery**: MambaByte (353M, byte-level SSM, vocab=256, Apache-2.0).
+  Native byte-level model — outputs P(byte) directly, no tokenizer bridge needed.
+  O(1) per step (like RWKV). Domain variants: Code, ArXiv, Books, Wiki, PG-19.
+- **Architecture gap identified**: code is RWKV-monolith (`bridge.rs` hardcodes
+  `WorldTokenizer`, `main.rs` lines 589-714 inline). Needs `ByteBackbone` trait.
+- **Upgrade path**: RWKV7-G1k 0.1B (191M, 5T+ tokens) is drop-in upgrade to
+  current 0.1B World v2.8 (100M, ~1T tokens).
+- See `docs/research/r58-multi-backbone-inventory.md`.
+
+### R59: T2b R56 Deep Analysis
+
+- **Purpose**: Deep quantitative analysis of T2b R56 results (12 Silesia × 100KB).
+- **T2b R56 composite**: mean=1.8678 (-0.0136), sigma=1.3857 (-0.0337),
+  worst=4.9844 (-0.2626). 10/12 files improve.
+- **Convergence analysis**: 4 files strongly converging (samba, webster, osdb, sao),
+  2 diverging (mozilla, x-ray), 1 anti-learning (ooffice).
+- **Bit-cost profiles**: 3 distinct patterns identified:
+  - Profile A (ASCII text): bits 3-5 dominate (56-66%)
+  - Profile B (restricted range): bits 5-7 dominate (70-81%)
+  - Profile C (high entropy/binary): near-uniform distribution
+  - Profile D (non-English UTF-8): bit1 anomalously high (12% vs 6%)
+- **ooffice regression root cause (+0.3616)**: ANTI-LEARNER — only file where BPB
+  increases over time (2.39→2.93→3.29). OLE2 alternates structured/random sections.
+  Order-chain propagates stale context, neural-blend injects OOD noise.
+- **reymont regression root cause (+0.0406)**: UTF-8 byte/character mismatch.
+  Polish diacritics are 2-byte sequences; order-chain crosses char boundaries.
+- **Competitive position**: **We beat PAQ8PX v217 on dickens at only 100KB**
+  (1.3387 vs 1.4568). PAQ uses the full 10MB file.
+- **Scale projections**: 6/12 files show 30-50% improvement potential at 1MB+.
+- See `docs/research/r59-t2b-r56-deep-analysis.md`.
+
+### R60: Roadmap Restructure — Multi-Backbone Architecture
+
+- **Purpose**: Restructure roadmap with security-first, evaluate-before-integrate approach.
+- **Sequence**: EVALUATE (security + quality) → MODULARIZE (decouple) → INTEGRATE (adopt).
+- **Phase A**: Backbone Security & Quality Gate (zero code changes)
+  - Weight format security policy: pickle NEVER safe (arbitrary code execution by design).
+    Documented: CVE-2026-4372, CVE-2026-1839, ShadowPickle (2026), JFrog zero-days.
+    SafeTensors only audited format (Trail of Bits 2023).
+  - Per-candidate metadata cards with security risk, format, SHA-256, conversion needs.
+  - 5-phase evaluation protocol with kill criteria at each phase.
+  - Already killed (Phase 0): ESM-2, DNABERT-2, ByT5, BLT, MEGABYTE.
+- **Phase B**: Architecture Modularization (zero behavioral changes)
+  - `ByteBackbone` trait, `RwkvBackbone` refactor, `BackboneOrchestrator` pre-blend.
+  - Validation: BPB identical ±0.0001 post-refactor.
+- **Phase C**: Backbone Adoption
+  - C.0: Quick wins (G1k upgrade, confidence-gate, 1MB eval).
+  - C.1: MambaByte-Code 353M (byte-level SSM, domain D target).
+  - C.2: Scientific micro-backbones (Chronos, ProGen2, BioGPT, WaveNet, Evo 2).
+- **Phase D**: Advanced Features (confidence-skip, per-backbone weighting, scale up,
+  self-distillation, streaming mode).
+- **Replaces**: old Tiers S/A/B/C + R51 (all complete/archived).
+- See `docs/research/r60-roadmap-restructure-multi-backbone.md`.

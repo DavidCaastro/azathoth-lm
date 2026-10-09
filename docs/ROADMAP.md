@@ -1,6 +1,6 @@
 # Roadmap — azathoth-lm
 
-**Date**: 2026-10-08
+**Date**: 2026-10-09
 **Current best (enwik8)**: 1.1810 BPB (100KB, Phase 1 R53)
 **Current composite (T1, 10KB)**: mean=1.4412 | sigma=0.2574 | worst=1.8184 (Phase 4 E3, R56)
 **Current composite (T2b, 100KB)**: mean=1.8678 | sigma=1.3857 | worst=4.9844 (12 Silesia, R56 --order-chain --neural-blend)
@@ -67,60 +67,75 @@ Phase 1 (R53) confirmed: byte context + BPTT=64 passes T1 composite gate.
 | **sigma** | | **0.2677** | 0.3030 | **-0.0353** | |
 | **worst** | | **1.8200** | 1.8378 | **-0.0178** | |
 
-## What's Next
+## What's Next — Multi-Backbone Architecture (R60)
 
-### Tier S — Critical path (implement first)
+The R51 organic roadmap is **COMPLETE** (2 confirmed, 3 killed). All single-backbone
+optimization is exhausted at 100KB scale. The next frontier is multi-backbone
+integration, following a strict sequence: **EVALUATE → MODULARIZE → INTEGRATE**.
 
-The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
+Full details: `docs/research/r60-roadmap-restructure-multi-backbone.md`
 
-| # | Action | Est. Delta | Effort | Rationale |
+### Phase A: Backbone Security & Quality Gate (zero code changes)
+
+Establish trust framework BEFORE any integration work.
+
+**A.1 Weight Format Security Policy**: pickle is NEVER safe to load directly —
+it executes arbitrary code by design (CVE-2026-4372, ShadowPickle 2026).
+SafeTensors is the only audited format (Trail of Bits 2023). All `.pth` weights
+require sandboxed conversion in isolated VM. See R60 A.1 for full protocol.
+
+**A.2 Candidate Metadata**: each backbone carries structured risk assessment
+(publisher verification, format, SHA-256, RAM, security risk level, conversion
+requirements, integration effort, known risks). See R60 A.2 for per-candidate cards.
+
+**A.3 Five-Phase Evaluation Protocol** (kill criteria at each phase):
+- Phase 0: Eligibility screen (5 min, paper only)
+- Phase 1: Standalone BPB (30 min, T1 reference corpus)
+- Phase 2: Redundancy analysis (1h, correlation with existing system)
+- Phase 3: Integration test (4-8h, composite gate)
+- Phase 4: Regression test (8-24h, T2b full suite)
+
+**Already killed (Phase 0)**: ESM-2, DNABERT-2, ByT5, BLT 1B, MEGABYTE.
+**Survive Phase 0**: RWKV7-G1k, MambaByte, Chronos-Bolt, ProGen2, BioGPT, Evo 2, WaveNet.
+
+### Phase B: Architecture Modularization (zero behavioral changes)
+
+Decouple RWKV from the evaluation loop. Make backbone plug-and-play.
+
+- **B.1**: `ByteBackbone` trait (`byte_probs`, `observe_byte`, `reset`)
+- **B.2**: Refactor RWKV inline → `RwkvBackbone` (pure structural change)
+- **B.3**: `BackboneOrchestrator` — pre-blend all backbones into single `[f32; 256]`
+  (avoids +0.013/group regression pattern)
+- **B.4**: Bit-level adapter (existing `byte_probs_to_bit_preds`)
+- **B.5**: Validation gate — BPB identical ±0.0001 post-refactor
+
+### Phase C: Backbone Adoption (ordered by impact/risk)
+
+| # | Action | Impact | Effort | Security |
 |---|---|---|---|---|
-| ~~S1~~ | ~~LSTM: coupled gates (i=1-f)~~ | **+0.0033 (neutral)** | ~~Low~~ | **DONE (R35).** -25% params (67K→50K), +15% speed (137→158 B/s). Prerequisite confirmed. |
-| ~~S2~~ | ~~LSTM: LayerNorm~~ | **-0.0057 (100KB)** | ~~Med~~ | **DONE (R36).** Per-gate LN, +768 params. -0.0510 on 10KB (early boost). Prerequisite confirmed. |
-| ~~S3~~ | ~~LSTM: BPTT=8 (1 full byte)~~ | **-0.0055 (100KB)** | ~~High~~ | **DONE (R37).** Adam(beta1=0.02, beta2=0.9999) + grad clip. -0.0017 on 10KB. 148 B/s (-4%). First temporal learning. |
-| ~~S4~~ | ~~WordModel (case-folded + word-pair)~~ | **+0.0009 (neutral)** | ~~Med~~ | **DONE (R38).** Redundant with RWKV word-level understanding. +12 MB, -1% speed. Kept for diversity. |
+| C.0.1 | **RWKV7-G1k 0.1B upgrade** (191M, 5T tokens) | -0.05 to -0.15 text BPB | Low | VERY LOW (SafeTensors) |
+| C.0.2 | **Confidence-gated order-chain** | Fix ooffice +0.36, reymont +0.04 | Low | N/A |
+| C.0.3 | **Eval at 1MB scale** | Validate R59 convergence projections | Low | N/A |
+| C.1 | **MambaByte-Code 353M** (byte-level SSM) | Domain D: -0.5 to -2.0 BPB | High | MEDIUM (.pth only) |
+| C.2 | **Scientific micro-backbones** (Chronos, ProGen2, BioGPT, WaveNet, Evo 2) | Domain expansion | Per-backbone | Per-backbone |
 
-### Tier A — High impact
+### Phase D: Advanced Features (contingent on C success)
 
-| # | Action | Est. Delta | Effort | Rationale |
-|---|---|---|---|---|
-| ~~A1~~ | ~~APM/SSE 1-2 stages (distinct ctx)~~ | **KILLED (+0.10)** | ~~Low~~ | **R39.** +0.10 to +0.19 regression. LSTM well-calibrated, APM bins too sparse at 100KB. Only viable at full enwik8 (100MB). |
-| ~~A2~~ | ~~Match model multi-input~~ | **KILLED (+0.001-0.013)** | ~~Low~~ | **R40.** Both multi-external and all-match variants regressed. Best-only match is optimal. Shorter matches add noise. |
-| ~~A3~~ | ~~Tweedie denoising (Midicoth)~~ | **Demoted to C** | ~~Med~~ | Only validated on PPM pipelines (not after LSTM). APM/SSE validated in cmix. Interference risk. |
-
-### Tier B — Medium impact
-
-| # | Action | Est. Delta | Effort | Rationale |
-|---|---|---|---|---|
-| ~~B1~~ | ~~LSTM: 2 layers × 128~~ | **KILLED (+0.0003 at 100KB)** | ~~Med~~ | **R43.** 2×64 gives -0.0216 at 10KB but neutral at 100KB. Only 2 inputs to top LSTM → insufficient information for 2nd layer. Infra retained (--lstm-layers N). |
-| ~~B2~~ | ~~BPTT scaling to 16-32~~ | **KILLED (+0.0000 at 100KB)** | ~~Med~~ | **R41.** BPTT=16 exactly neutral, BPTT=32 slight regression. BPTT=8 (1 byte) is optimal for bit-level LSTM. Cross-byte bit patterns are noise. |
-| ~~B3~~ | ~~ISSE chains (3-5 stages)~~ | **KILLED (by analogy with A1)** | ~~Med~~ | Same family as APM/SSE (A1). Post-mixer correction overcorrects at 100KB scale. LSTM already well-calibrated. |
-| ~~B4~~ | ~~Higher-order CM (orders 12, 16)~~ | **KILLED (+0.0004 at 100KB)** | ~~Low~~ | **R42.** Redundant with RWKV long-context. Confirms R33: CM count not bottleneck in hybrid. |
-| ~~B5~~ | ~~WRT preprocessing (256→~205 symbols)~~ | **Deferred** | ~~Med~~ | Redundant with RWKV 65K tokenizer (like WordModel S4). Only viable for CM-only mode. |
-
-### Tier C — Lower priority / speculative
-
-| # | Action | Est. Delta | Effort | Rationale |
-|---|---|---|---|---|
-| ~~C1~~ | ~~Online LSTM expert (RATA-CMIX style)~~ | **KILLED (+0.0127)** | ~~High~~ | **R44.** Expert as external creates new mixer group. Group overhead > prediction value at 100KB. Code retained (--expert). |
-| ~~C2~~ | ~~Information inheritance between CM orders~~ | **KILLED (by analysis)** | ~~Med~~ | Redundant with hierarchical mixer (already combines all orders). Same pattern as R33/B4: CM enhancement neutral with RWKV. |
-| ~~C3~~ | ~~Modality-routing (OmniZip-inspired)~~ | **KILLED (by analysis)** | ~~High~~ | Violates no-domain-detection principle. Adding routing creates new mixer complexity → same regression pattern as C1/A2. |
-
-### Blocked
-
-| # | Action | Blocker |
+| # | Action | Prerequisite |
 |---|---|---|
-| E1 | Domain checkpoint (fine-tune RWKV) | Requires GPU |
-| E2 | Larger neural model (0.4B+) | No checkpoint outperforms 0.1B on enwik8 |
-| E3 | Domain-trained small TF (fx2-cmix style) | Requires GPU for pre-training |
+| D.1 | Confidence-skip CM→neural | Phase B |
+| D.2 | Per-backbone confidence weighting | Phase C.1 |
+| D.3 | RWKV7-G1k 1.5B Q4 (scale up) | Phase C.0.1 |
+| D.4 | Self-distillation RWKV→uSSM | Phase C.1 |
+| D.5 | Streaming mode (real-time input) | Phase B |
 
-### Killed / Deprioritized (with justification)
+### Dependency Graph
 
-| # | Action | Original Est. | Why killed | Source |
-|---|---|---|---|---|
-| ~~A1 old~~ | CM scaling 9→25+ models | -0.05 to -0.10 | Model count not bottleneck. R33 showed +0.0027 (neutral). Quality/diversity > quantity. WordModel is the ONE missing model. | R34 |
-| ~~B2 old~~ | Hedge mixer experiment | -0.005 to -0.02 | Nacrith ablation: Hedge converges to w_llm≈1.0 (pass-through). Not useful when models have comparable strength. | R34 |
-| ~~D1~~ | Full SA-PPM (suffix array) | -0.10 to -0.30 | Revised to -0.01 to -0.05. No top compressor uses suffix arrays. ppmonstr order-64 ≈ PPMd order-16. Match improvements capture 80% at 5% effort. | R34 |
+```
+Phase A (evaluate) ──→ Phase B (modularize) ──→ Phase C (adopt) ──→ Phase D (advanced)
+```
+
+Phase A = research only. Phase B = pure refactor. Phase C = behavioral changes (must pass eval protocol). Phase D = contingent on C.
 
 ## Completed Summary
 
@@ -167,88 +182,48 @@ The LSTM mixer stack is the single biggest lever. Each item unlocks the next.
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 
-## Remaining Trajectory (enwik8, from 1.1852)
+## Completed Trajectory (R51 Organic Reform — COMPLETE)
 
-Post Tier S + A + B + C. **All roadmap items exhausted at 100KB.**
+**All single-backbone optimization exhausted at 100KB scale.**
+17 experiments across 4 tiers confirmed a hard local minimum.
+R51 organic reform executed: 2 phases confirmed, 3 killed.
 
-### Fundamental finding: 100KB ceiling
+### R51 Phase Results
 
-Every approach tested — 17 experiments across 4 tiers — converges to
-the same result: the architecture is at a **hard local minimum** at
-100KB scale. The root cause is the hierarchical mixer:
+| Phase | Action | Result | Source |
+|---|---|---|---|
+| ~~0~~ | ~~Adaptive preprocessing~~ | **KILLED** — transforms destroy RWKV predictions | R52 |
+| **1** | **Byte-context LSTM** (BPTT=64) | **CONFIRMED** — T1 all 3 metrics ↓ | R53 |
+| ~~2~~ | ~~Tweedie post-correction~~ | **KILLED** — interferes with adaptive mixer | R54 |
+| **3** | **Neural blend** (44K expert) | **CONFIRMED** — mean -0.0221, binary -0.0096 | R55 |
+| **4** | **Order-chain** (E3) | **CONFIRMED** — mean -0.0247, all 5 domains ↓ | R56 |
+| ~~4~~ | ~~Rank encoding (E4)~~ | **KILLED** — mean +0.010, MTF harms matching | R56 |
 
-- Adding new externals creates new groups → parameter overhead > information gain
-- Adding model complexity (BPTT, layers, orders) → neutral due to limited data
-- Post-mixer correction (APM/SSE/ISSE) → overcorrects with sparse bins
-
-The ONLY gains that worked (S2 LayerNorm -0.0057, S3 BPTT=8 -0.0055) improved
-existing components rather than adding new ones.
-
-### Cross-domain analysis (R46)
-
-Four domain clusters identified. Three orthogonal failure factors quantified:
-tokenization quality (40% of BPB variance), intrinsic entropy (35%),
-RWKV pretraining alignment (25%). Key insight: **context mixing IS soft MoE** —
-the gap vs cmix is scale + preprocessing, not routing mechanism.
-
-Dynamic CM instantiation analyzed and found risky at current scale:
-- CMs with few observations produce confident but unreliable predictions
-- LSTM mixer cannot distinguish real vs spurious confidence (no observation count)
-- Adding/removing groups destabilizes mixer convergence (same pattern as R44)
-- Only viable with self-gating + minimum observation threshold + >1MB data
-
-### R51 — Organic Architecture Reform (replaces Tier N)
-
-R50 (25-file, 100KB baselines) + ecosystem research (2024-2026) revealed that
-our gap vs SOTA is **integration, not models**:
-- BPTT=8 bits vs cmix's 128 (16x gap)
-- Mixer blind to actual bytes (only sees 4 group logits)
-- No post-correction (Tweedie proposed but KILLED R54 — see below)
-
-**The old Tier N items (N4, N5, N6) are subsumed by R51's phased organic reform.**
-See `docs/research/r51-organic-architecture-reform.md` for full analysis,
-mathematical validation (3x verified per layer), and 11 research sources.
-
-| Phase | Action | Est. Delta | Risk | Rationale |
-|---|---|---|---|---|
-| ~~**0**~~ | ~~Adaptive preprocessing (delta + byte-plane split)~~ | **KILLED (R52)** | — | Transforms destroy RWKV predictions. Incompatible with pre-trained models. |
-| **1** | **Byte-context LSTM** (44 floats, BPTT=64) | **CONFIRMED (R53)** | Low | T1 composite gate PASS: mean -0.0016, sigma -0.0353, worst -0.0178. All 3 ↓. |
-| ~~**2**~~ | ~~Tweedie post-correction~~ (2048 buckets, 24 KB) | **KILLED (R54)** | — | Both shrinkage and calibration regress. Second adaptation loop interferes with mixer's online learning. Same root cause as SSE. |
-| **3** | **Neural blend** (44K expert pre-blend with RWKV) | **CONFIRMED (R55)** | Low | T1 composite PASS: mean -0.0221, sigma -0.0005, worst +0.0015. Binary -0.0096. |
-| **4** | **CM order-chain** (E3) | **CONFIRMED (R56)** | Low | T1 composite PASS: mean -0.0247, sigma -0.0103, worst -0.0016. All 5 domains ↓. |
-| ~~**4**~~ | ~~Rank-based encoding (E4)~~ | **KILLED (R56)** | — | Mean +0.010, sigma +0.008, worst +0.015. MTF context destroys exact matching at 10KB. |
-
-**Unexplored edges** (E1-E6): byte-plane split, WHT feature expansion,
-CM information inheritance, rank-based encoding, RWKV→uSSM self-distillation,
-prediction horizon adaptation. Details in R51.
-
-**Validation gate per phase** (R28): mean DOWN + sigma SAME/DOWN + worst not UP >0.05.
-Phases are independent — failure of one does not block others.
-
-### Projected path forward
+### BPB Progression (enwik8)
 
 ```
-1.1843  S3 baseline (post all optimization series)
-1.1810  ✓ Phase 1 CONFIRMED (byte-context LSTM, BPTT=64) — R53
-  ----  ✗ Phase 0 KILLED (preprocessing incompatible with RWKV) — R52
-  ----  ✗ Phase 2 KILLED (post-correction fights adaptive mixer) — R54
-1.1666  ✓ Phase 3 CONFIRMED (neural blend, -0.0096 binary) — R55
-1.1633  ✓ Phase 4 E3 CONFIRMED (order-chain, all 5 domains ↓) — R56
-  ----  ✗ Phase 4 E4 KILLED (rank encoding, MTF context harms matching) — R56
-~1.15   CPU ceiling (enwik8), T2b ~1.50
-<1.0    requires domain-tuned neural model (GPU)
+1.1843  S3 baseline (post optimization series)
+1.1810  Phase 1 CONFIRMED (byte-context LSTM, BPTT=64) — R53
+1.1666  Phase 3 CONFIRMED (neural blend) — R55
+1.1633  Phase 4 E3 CONFIRMED (order-chain) — R56
+~1.15   Estimated CPU ceiling (single backbone)
+<1.0    Requires multi-backbone + domain coverage (R60 roadmap)
 ```
 
-### Legacy: Tier N items (superseded by R51)
+### Key Lessons (inform R60)
 
-| Old # | Status | Disposition |
-|---|---|---|
-| N1 | DONE (R47) | RWKV helps all 14 files. Diagnostic complete. |
-| N2 | DEMOTED | Mixer input overhead pattern. Subsumed by R51 Phase 1 (byte context). |
-| N3 | DONE (R49) | E8/E9 implemented. ooffice -0.18. |
-| N4 | → R51 Phase 0 | Delta coding subsumed by adaptive preprocessing. |
-| N5 | → R51 Phase 3/4 | Specialized CM subsumed by uSSM + CM order-chain. |
-| N6 | Deferred | Full enwik8 100MB eval (8-29 days). Scale validation after R51 phases. |
+- **100KB ceiling**: architecture is at hard local minimum with single backbone
+- **Group overhead pattern**: new externals → +0.013/group regression (R40, R44)
+- **Post-correction always fails**: ANY second adaptation loop fights adaptive mixer (R54)
+- **Pre-blend works**: expert blend within existing group avoids overhead (R55)
+- **Improving existing > adding new**: only S2/S3 (existing component improvements) worked
+- **Convergence projections** (R59): 6/12 Silesia files show 30-50% improvement at 1MB+
+
+### Archived Tiers (S/A/B/C — all items DONE or KILLED)
+
+Full details of 17 completed experiments in `docs/CHANGELOG.md`.
+Tier S (S1-S4), Tier A (A1-A3), Tier B (B1-B5), Tier C (C1-C3): all resolved.
+Legacy Tier N items (N1-N6): superseded by R51 phases.
 
 ## Constraints
 

@@ -81,6 +81,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R57 — Strategic positioning** | **Research** | **Universal data synthesis core vision. Adaptive middleware as sellable subproduct.** |
 | **R58 — Multi-backbone inventory** | **Research** | **50+ pretrained backbones cataloged. MambaByte (byte-level SSM) = top discovery. Roadmap reformulation pending.** |
 | **R59 — T2b R56 deep analysis** | **Complete** | **Convergence, bit costs, match model, competitive analysis. ooffice anti-learning root cause. Beat PAQ8PX on dickens at 100KB.** |
+| **R60 — Roadmap restructure** | **Approved** | **Multi-backbone architecture. Evaluate→Modularize→Integrate. Security-first (pickle NEVER). ByteBackbone trait. 5-phase eval protocol.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
