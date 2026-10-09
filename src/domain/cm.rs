@@ -49,6 +49,13 @@ fn quantize_logit(x: f32) -> u8 {
     else { 3 }
 }
 
+/// Confidence gate for order-chain (C.0.2, R60).
+/// If |chain_logit| < this threshold, fall back to unchained predict/update.
+/// This prevents stale context propagation in heterogeneous data (ooffice)
+/// and cross-character-boundary contamination (reymont UTF-8).
+/// 0.5 ≈ 62% confidence in one direction.
+const CHAIN_GATE: f32 = 0.5;
+
 // --- Hash table slot ---
 
 // Scaled u16 counters: each observation adds SCALE counts.
@@ -842,12 +849,15 @@ impl ContextMixer {
             let bit = (byte >> (7 - j)) & 1;
 
             if self.chain_orders {
-                // Order models: predict sequentially to get chain logits, then update with chain
+                // Order models: predict sequentially to get chain logits, then update with chain.
+                // Confidence gate (C.0.2): if |chain_logit| < CHAIN_GATE, use unchained path
+                // to prevent stale context propagation in high-entropy/heterogeneous data.
                 let mut chain_logit = 0.0f32;
                 for i in 0..Self::N_ORDER {
+                    let confident = chain_logit.abs() >= CHAIN_GATE;
                     let p = match &self.models[i] {
                         ContextModel::Order(om) => {
-                            if i == 0 {
+                            if i == 0 || !confident {
                                 om.predict(&self.history, self.history_len, self.max_history, c)
                             } else {
                                 om.predict_chained(&self.history, self.history_len, self.max_history, c, chain_logit)
@@ -856,10 +866,11 @@ impl ContextMixer {
                         _ => 0.5,
                     };
                     let prev_chain = chain_logit;
+                    let prev_confident = confident;
                     chain_logit = stretch(p);
                     match &mut self.models[i] {
                         ContextModel::Order(om) => {
-                            if i == 0 {
+                            if i == 0 || !prev_confident {
                                 om.update(&self.history, self.history_len, self.max_history, c, bit);
                             } else {
                                 om.update_chained(&self.history, self.history_len, self.max_history, c, bit, prev_chain);
@@ -928,13 +939,15 @@ impl ContextMixer {
 
             // Collect predictions from all CM models
             let mut chain_logits_saved = [0.0f32; Self::N_ORDER];
+            let mut chain_confident_saved = [false; Self::N_ORDER];
             if self.chain_orders {
-                // Order models: predict sequentially with chain input
+                // Order models: predict sequentially with confidence-gated chain (C.0.2)
                 let mut chain_logit = 0.0f32;
                 for i in 0..Self::N_ORDER {
+                    let confident = chain_logit.abs() >= CHAIN_GATE;
                     let p = match &self.models[i] {
                         ContextModel::Order(om) => {
-                            if i == 0 {
+                            if i == 0 || !confident {
                                 om.predict(&self.history, self.history_len, self.max_history, c)
                             } else {
                                 om.predict_chained(&self.history, self.history_len, self.max_history, c, chain_logit)
@@ -943,6 +956,7 @@ impl ContextMixer {
                         _ => 0.5,
                     };
                     chain_logits_saved[i] = chain_logit;
+                    chain_confident_saved[i] = confident;
                     chain_logit = stretch(p);
                     self.pred_buf[i] = p;
                 }
@@ -1018,12 +1032,12 @@ impl ContextMixer {
                 }
             }
 
-            // Update all CM models
+            // Update all CM models (with confidence gate matching predict path)
             if self.chain_orders {
                 for i in 0..Self::N_ORDER {
                     match &mut self.models[i] {
                         ContextModel::Order(om) => {
-                            if i == 0 {
+                            if i == 0 || !chain_confident_saved[i] {
                                 om.update(&self.history, self.history_len, self.max_history, c, bit);
                             } else {
                                 om.update_chained(&self.history, self.history_len, self.max_history, c, bit, chain_logits_saved[i]);

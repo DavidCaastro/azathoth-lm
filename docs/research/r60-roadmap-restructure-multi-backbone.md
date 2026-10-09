@@ -467,13 +467,26 @@ Each candidate passes through the A.3 evaluation protocol before integration.
 
 ### C.0 Quick Wins (no new backbone, improve existing)
 
-| # | Action | Impact | Effort |
-|---|---|---|---|
-| C.0.1 | **RWKV7-G1k 0.1B upgrade** (191M, 5T tokens, SafeTensors) | -0.05 to -0.15 text BPB | Low (drop-in via B.2) |
-| C.0.2 | **Confidence-gated order-chain** | Eliminates ooffice +0.36, reymont +0.04 | Low (~20 lines) |
-| C.0.3 | **Eval at 1MB scale** | Validates convergence projections from R59 | Low (runtime only) |
+| # | Action | Impact | Effort | Status |
+|---|---|---|---|---|
+| C.0.1 | ~~RWKV7-G1k 0.1B upgrade~~ | N/A | N/A | **KILLED** — model does not exist (G1k starts at 1.5B). G1d tested R32: +0.0791 regression. |
+| C.0.2 | **Confidence-gated order-chain** | Eliminates ooffice +0.36, reymont +0.04 | Low (~20 lines) | IMPLEMENTED — 100KB validation pending |
+| C.0.3 | **Eval at 1MB scale** | Validates convergence projections from R59 | Low (runtime only) | PENDING |
+| C.0.4 | **G1k 1.5B Q8 as second backbone** | -0.10+ text BPB (was D.3) | MEDIUM (Q8 needed, ~1.5 GB RAM) | PENDING |
+| C.0.5 | **Float-aware byte-plane separation** | -1.0 to -1.7 BPB on IEEE-754 floats | MEDIUM | PENDING (R61) |
 
-These require NO new backbones and NO architectural risk.
+C.0.1 killed: HuggingFace search confirms NO G1k model at 0.1B size.
+Smallest G1k is 1.5B (already downloaded as `rwkv7-g1k-1.5b`, 3 GB F32).
+The 0.1B "g1" variant (fla-hub/rwkv7-0.1B-g1, tested as G1d) gave WORSE
+BPB (1.2471 vs 1.1680) — confirmed in R32, not a candidate.
+
+C.0.4 added: pull D.3 forward since we already have G1k 1.5B weights
+and BackboneOrchestrator is ready. Requires Q8 quantization to fit in RAM.
+
+C.0.5 added (R61): IEEE-754 float byte-plane separation for ait-E/F/ml-weights.
+No viable pretrained backbone exists for float data (BOA Constrictor AGPL=killed).
+ZipNN-style exponent/mantissa separation + CM-only preprocessing is the path.
+Must NOT feed transformed data to RWKV (R52 lesson). See R61 for full analysis.
 
 ### C.1 MambaByte-Code 353M (primary new backbone)
 
@@ -487,8 +500,15 @@ Mamba's selective scan is non-trivial but well-documented.
 **Expected impact**: Domain D (binaries, high-entropy) BPB reduction of 0.5-2.0.
 ooffice, sao, x-ray are the primary beneficiaries.
 
-**Security**: MEDIUM risk. Academic publisher (JunxiongWang), likely .pth format.
-Requires sandboxed conversion. No published checksums — must compute and record.
+**Security**: MEDIUM risk. Academic publisher (JunxiongWang), `.pth` format ONLY
+(pytorch_model.bin, NO SafeTensors available — verified R61).
+Requires sandboxed conversion per A.1 policy. No published checksums.
+
+**Verified availability** (R61): HuggingFace `JunxiongWang/MambaByte_Code`,
+Apache-2.0, 353M params. Also available: MambaByte_PG19 (353M/972M),
+MambaByte_Books, MambaByte_Arxiv — all Apache-2.0, all .pth.
+
+**T3 coverage**: ait-H (ELF, 3.05 BPB), modern-x64-pe (PE, 2.97 BPB).
 
 **Evaluation path**: Phase 0 ✓ → Phase 1 (standalone BPB) → Phase 2 (correlation) →
 Phase 3 (pre-blend integration) → Phase 4 (T2b regression).
@@ -497,13 +517,18 @@ Phase 3 (pre-blend integration) → Phase 4 (T2b regression).
 
 Only after C.1 validates the multi-backbone architecture:
 
-| Candidate | Domain | Params | Security | Phase 0 |
-|---|---|---|---|---|
-| Chronos-Bolt Tiny | Time series | 9M | LOW (Amazon) | ✓ autoregressive |
-| ProGen2-small | Protein sequences | 151M | LOW (Salesforce, BSD-3) | ✓ autoregressive |
-| BioGPT | Medical text | 347M | LOW (Microsoft, MIT) | ✓ autoregressive |
-| WaveNet vocoder | Audio bytes | 4M | MEDIUM (community) | ✓ autoregressive, 256-softmax |
-| Evo 2 1B | DNA sequences | 1B | LOW (Arc Institute, Apache-2.0) | ✓ autoregressive |
+| Candidate | Domain | Params | Security | Phase 0 | R61 Status |
+|---|---|---|---|---|---|
+| **ProGen2-small** | Protein sequences | 151M | LOW (BSD-3, **SafeTensors native**) | ✓ autoregressive | **CONFIRMED** — covers ait-A (3.92 BPB) |
+| Chronos-Bolt Tiny | Time series | 9M | LOW (Amazon) | ✓ autoregressive | Pending — no T3 file match |
+| ~~BioGPT~~ | Medical text | 347M | LOW (Microsoft, MIT) | ✓ autoregressive | **DEPRIORITIZED** — redundant with RWKV for text |
+| ~~WaveNet vocoder~~ | Audio bytes | 4M | MEDIUM (community) | ✓ autoregressive | **DEPRIORITIZED** — no pretrained weights found |
+| ~~Evo 2 1B~~ | DNA sequences | 1B | LOW (Apache-2.0) | ✓ autoregressive | **KILLED R61** — wrong domain (nucleotides ≠ amino acids), RAM too large |
+
+R61 additions (candidates investigated and killed):
+- ~~BOA Constrictor~~ (4.5M, Mamba HEP): **KILLED — AGPL-3.0 license**
+- ~~AstroPT~~ (300M, galaxy images, MIT): **KILLED — patch-level, not byte-level**
+- ~~Large Byte Model~~ (2026, binary): **KILLED — weights not published**
 
 These expand domain coverage beyond text+binary. Each must pass the full
 Phase 0-4 protocol independently.

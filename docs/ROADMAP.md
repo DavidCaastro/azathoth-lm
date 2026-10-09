@@ -108,15 +108,17 @@ Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 - **B.4**: Bit-level adapter — DONE (pre-existing `byte_probs_to_bit_preds`)
 - **B.5**: Validation gate — PASSED (all T1 files ±0.0006, basic path exact)
 
-### Phase C: Backbone Adoption (ordered by impact/risk)
+### Phase C: Backbone Adoption (ordered by impact/risk) — R61 updated
 
-| # | Action | Impact | Effort | Security |
+| # | Action | Impact | Effort | Status |
 |---|---|---|---|---|
-| C.0.1 | **RWKV7-G1k 0.1B upgrade** (191M, 5T tokens) | -0.05 to -0.15 text BPB | Low | VERY LOW (SafeTensors) |
-| C.0.2 | **Confidence-gated order-chain** | Fix ooffice +0.36, reymont +0.04 | Low | N/A |
-| C.0.3 | **Eval at 1MB scale** | Validate R59 convergence projections | Low | N/A |
-| C.1 | **MambaByte-Code 353M** (byte-level SSM) | Domain D: -0.5 to -2.0 BPB | High | MEDIUM (.pth only) |
-| C.2 | **Scientific micro-backbones** (Chronos, ProGen2, BioGPT, WaveNet, Evo 2) | Domain expansion | Per-backbone | Per-backbone |
+| ~~C.0.1~~ | ~~G1k 0.1B upgrade~~ | N/A | N/A | KILLED — model doesn't exist |
+| C.0.2 | **Confidence-gated order-chain** | Fix ooffice +0.36, reymont +0.04 | Low | IMPLEMENTED — validation pending |
+| C.0.3 | **Eval at 1MB scale** | Validate R59 convergence projections | Low | PENDING |
+| C.0.4 | **G1k 1.5B Q8 as second backbone** | -0.10+ text BPB | Medium | PENDING |
+| C.0.5 | **Float byte-plane separation** (R61) | -1.0 to -1.7 BPB on floats (ait-E/F) | Medium | PENDING |
+| C.1 | **MambaByte-Code 353M** (byte-level SSM) | Executables: -0.5 to -2.0 BPB | High | PENDING (.pth, needs conversion) |
+| C.2 | **ProGen2-small** (151M, protein, BSD-3) | ait-A: -1.0+ BPB | Medium | CONFIRMED (SafeTensors native) |
 
 ### Phase D: Advanced Features (contingent on C success)
 
@@ -124,7 +126,7 @@ Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 |---|---|---|
 | D.1 | Confidence-skip CM→neural | Phase B |
 | D.2 | Per-backbone confidence weighting | Phase C.1 |
-| D.3 | RWKV7-G1k 1.5B Q4 (scale up) | Phase C.0.1 |
+| D.3 | RWKV7-G1k 1.5B Q4 (scale up) | Phase C.0.4 |
 | D.4 | Self-distillation RWKV→uSSM | Phase C.1 |
 | D.5 | Streaming mode (real-time input) | Phase B |
 

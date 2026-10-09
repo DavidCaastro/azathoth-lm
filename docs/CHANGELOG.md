@@ -544,10 +544,33 @@ Projected                           Actual
   - B.5: Validation gate PASSED — all T1 files within ±0.0006 BPB.
   - Files: `src/domain/backbone.rs` (new), `src/main.rs` (refactored).
 - **Phase C**: Backbone Adoption
-  - C.0: Quick wins (G1k upgrade, confidence-gate, 1MB eval).
+  - C.0.1: ~~G1k 0.1B upgrade~~ — KILLED (model doesn't exist, G1k starts at 1.5B).
+  - C.0.2: Confidence-gated order-chain — IMPLEMENTED, 100KB validation pending.
+  - C.0.5: Float byte-plane separation — NEW (R61, covers ait-E/F/ml-weights).
   - C.1: MambaByte-Code 353M (byte-level SSM, domain D target).
-  - C.2: Scientific micro-backbones (Chronos, ProGen2, BioGPT, WaveNet, Evo 2).
+  - C.2: Scientific micro-backbones — updated by R61:
+    - ProGen2-small CONFIRMED (BSD-3, SafeTensors native, covers ait-A protein).
+    - ~~Evo 2~~: KILLED (nucleotides ≠ amino acids, RAM too large).
+    - ~~BioGPT~~: deprioritized (redundant with RWKV for text).
+    - ~~WaveNet~~: deprioritized (no pretrained weights found).
 - **Phase D**: Advanced Features (confidence-skip, per-backbone weighting, scale up,
   self-distillation, streaming mode).
 - **Replaces**: old Tiers S/A/B/C + R51 (all complete/archived).
+
+### R61: AIT DCC 2026 Backbone Coverage Analysis
+
+- **Purpose**: Map T3 Modern files to backbone candidates, verify Phase A compliance.
+- **Method**: Domain inspection (file/xxd), HuggingFace API queries, web search for
+  candidates covering IEEE-754 floats, executables, protein, astronomical data.
+- **Result**: 6/11 covered by existing candidates, 1 incompressible (ait-D pseudo-random),
+  4 gaps — ALL are IEEE-754 float data.
+- **Candidates killed (Phase A)**:
+  - BOA Constrictor (Mamba HEP): AGPL-3.0 license (incompatible).
+  - AstroPT (galaxy images): patch-level, not byte-level (architecture mismatch).
+  - Large Byte Model (binary analysis): weights not published.
+  - Evo 2 1B (DNA): wrong domain (nucleotides ≠ amino acids) + RAM too large.
+- **Key finding**: No pretrained autoregressive model exists for IEEE-754 float data
+  with compatible license. Solution is byte-plane separation (ZipNN technique)
+  applied selectively to CM models only (RWKV sees raw bytes per R52 lesson).
+- See `docs/research/r61-ait-dcc-backbone-coverage-analysis.md`.
 - See `docs/research/r60-roadmap-restructure-multi-backbone.md`.

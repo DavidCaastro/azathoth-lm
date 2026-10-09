@@ -82,6 +82,8 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R58 — Multi-backbone inventory** | **Research** | **50+ pretrained backbones cataloged. MambaByte (byte-level SSM) = top discovery. Roadmap reformulation pending.** |
 | **R59 — T2b R56 deep analysis** | **Complete** | **Convergence, bit costs, match model, competitive analysis. ooffice anti-learning root cause. Beat PAQ8PX on dickens at 100KB.** |
 | **R60 — Roadmap restructure** | **Approved** | **Multi-backbone architecture. Evaluate→Modularize→Integrate. Security-first (pickle NEVER). ByteBackbone trait. 5-phase eval protocol.** |
+| **R60 — Phase B complete** | **DONE** | **ByteBackbone + RwkvBackbone + BackboneOrchestrator. Validation gate PASSED (T1 ±0.0006). Zero behavioral change.** |
+| **R61 — AIT DCC backbone coverage** | **Complete** | **6/11 covered, 1 incompressible, 4 gaps (IEEE-754 floats). BOA=AGPL killed, Evo2=wrong domain, AstroPT=not byte-level. Float byte-plane separation = C.0.5.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
