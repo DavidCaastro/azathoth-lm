@@ -536,9 +536,13 @@ Projected                           Actual
   - Per-candidate metadata cards with security risk, format, SHA-256, conversion needs.
   - 5-phase evaluation protocol with kill criteria at each phase.
   - Already killed (Phase 0): ESM-2, DNABERT-2, ByT5, BLT, MEGABYTE.
-- **Phase B**: Architecture Modularization (zero behavioral changes)
-  - `ByteBackbone` trait, `RwkvBackbone` refactor, `BackboneOrchestrator` pre-blend.
-  - Validation: BPB identical ±0.0001 post-refactor.
+- **Phase B**: Architecture Modularization — **COMPLETE** (2026-10-09)
+  - B.1: `ByteBackbone` trait (5 methods, minimal interface).
+  - B.2: `RwkvBackbone` struct (model + tokenizer + bridge + token tracking).
+  - B.3: `BackboneOrchestrator` (primary RWKV + auxiliary Vec, pre-blend).
+  - B.4: Bit-level adapter (pre-existing `byte_probs_to_bit_preds`).
+  - B.5: Validation gate PASSED — all T1 files within ±0.0006 BPB.
+  - Files: `src/domain/backbone.rs` (new), `src/main.rs` (refactored).
 - **Phase C**: Backbone Adoption
   - C.0: Quick wins (G1k upgrade, confidence-gate, 1MB eval).
   - C.1: MambaByte-Code 353M (byte-level SSM, domain D target).

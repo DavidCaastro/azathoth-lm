@@ -11,7 +11,7 @@ use crate::domain::mixer::AdaptiveMixer;
 use crate::domain::coder::{Cdf, RangeEncoder, RangeDecoder};
 use crate::domain::cm::ContextMixer;
 use crate::domain::bridge::byte_probs_to_bit_preds;
-use crate::domain::backbone::{ByteBackbone, RwkvBackbone};
+use crate::domain::backbone::{ByteBackbone, RwkvBackbone, BackboneOrchestrator};
 use crate::domain::match_model::MatchModel;
 use crate::domain::lstm_expert::LstmExpert;
 use crate::domain::preprocess::{self, Transform};
@@ -490,14 +490,18 @@ fn cmd_hybrid_eval(args: &[String]) {
     }
     eprintln!("[hybrid] input: {} ({} bytes){}", input_path, total_bytes, preprocess_tags);
 
-    // Load RWKV backbone (model + tokenizer + bridge)
-    let mut backbone = RwkvBackbone::load(
+    // Load RWKV backbone via orchestrator (model + tokenizer + bridge)
+    let rwkv = RwkvBackbone::load(
         &weights_dir,
         emb_surgery.as_deref(),
     );
-    backbone.prepare(input_slice);
+    let mut orchestrator = BackboneOrchestrator::new(rwkv);
+    orchestrator.rwkv_mut().prepare(input_slice);
     eprintln!("[hybrid] tokenized: {} tokens ({:.2} bytes/token)",
-              backbone.token_count(), backbone.bytes_per_token(total_bytes));
+              orchestrator.rwkv().token_count(), orchestrator.rwkv().bytes_per_token(total_bytes));
+    if orchestrator.backbone_count() > 1 {
+        eprintln!("[hybrid] backbones: {}", orchestrator.names().join(", "));
+    }
 
     // Initialize components
     let mut cm = if use_hierarchical {
@@ -535,7 +539,7 @@ fn cmd_hybrid_eval(args: &[String]) {
     let chain_str = if order_chain { " | order-chain" } else { "" };
     eprintln!("[hybrid] CM: {} models, {:.1} MB | mixer: {} | trie: {} nodes{}{}{}{}",
               cm.n_models(),
-              cm_mem_mb, mixer_str, backbone.trie_node_count(),
+              cm_mem_mb, mixer_str, orchestrator.rwkv().trie_node_count(),
               if use_match { format!(" | match: {:.1} MB", match_mem_mb) } else { String::new() },
               expert_str, blend_str, chain_str);
 
@@ -561,24 +565,24 @@ fn cmd_hybrid_eval(args: &[String]) {
 
     let t_start = std::time::Instant::now();
     let report_interval = (total_bytes / 4).max(1000);
-    let n_tokens = backbone.token_count();
+    let n_tokens = orchestrator.rwkv().token_count();
 
     for t in 0..n_tokens {
-        let tok_bytes = backbone.current_token_bytes().to_vec();
-        let have_rwkv = backbone.has_prediction();
+        let tok_bytes = orchestrator.rwkv().current_token_bytes().to_vec();
+        let have_rwkv = orchestrator.rwkv().has_prediction();
 
         if have_rwkv {
             // Check confidence skip: top-1 probability
             let top1_prob = if skip_active {
-                backbone.token_probs().iter().copied().fold(0.0f32, f32::max)
+                orchestrator.rwkv().token_probs().iter().copied().fold(0.0f32, f32::max)
             } else {
                 0.0
             };
 
             if skip_active && top1_prob >= skip_threshold {
                 // SKIP: use RWKV token-level cross-entropy for this token
-                let tok = backbone.current_token_id();
-                let prob_correct = backbone.token_probs()[tok] as f64;
+                let tok = orchestrator.rwkv().current_token_id();
+                let prob_correct = orchestrator.rwkv().token_probs()[tok] as f64;
                 let token_bits = -prob_correct.max(1e-30).log2();
                 let n_bytes = tok_bytes.len();
                 let bits_per_byte = token_bits / n_bytes as f64;
@@ -592,7 +596,7 @@ fn cmd_hybrid_eval(args: &[String]) {
                     if let Some(ref mut be) = blend_expert {
                         be.observe_byte(byte);
                     }
-                    backbone.observe_byte(byte);
+                    orchestrator.observe_byte(byte);
                     byte_count += 1;
 
                     if byte_count % report_interval == 0 || byte_count == total_bytes {
@@ -611,7 +615,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             } else {
                 // FULL HYBRID: backbone byte probs + CM
                 for &byte in tok_bytes.iter() {
-                    let rwkv_byte_probs = backbone.byte_probs();
+                    let rwkv_byte_probs = orchestrator.byte_probs();
 
                     // Neural blend (Phase 3, R55): blend expert with RWKV at byte level
                     let blended_byte_probs;
@@ -681,7 +685,7 @@ fn cmd_hybrid_eval(args: &[String]) {
                         blend_logit = blend_logit.clamp(-2.0, 8.0);
                         be.observe_byte(byte);
                     }
-                    backbone.observe_byte(byte);
+                    orchestrator.observe_byte(byte);
                     byte_count += 1;
 
                     if byte_count % report_interval == 0 || byte_count == total_bytes {
@@ -731,7 +735,7 @@ fn cmd_hybrid_eval(args: &[String]) {
                 if let Some(ref mut be) = blend_expert {
                     be.observe_byte(byte);
                 }
-                backbone.observe_byte(byte);
+                orchestrator.observe_byte(byte);
                 byte_count += 1;
             }
         }
@@ -771,7 +775,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             [0.0; 8]
         };
 
-        let bpt = backbone.bytes_per_token(total_bytes);
+        let bpt = orchestrator.rwkv().bytes_per_token(total_bytes);
 
         let meta = StateMetadata {
             input_path: input_path.clone(),
@@ -784,7 +788,7 @@ fn cmd_hybrid_eval(args: &[String]) {
             elapsed_secs: elapsed,
             token_count: n_tokens as u64,
             bytes_per_token: bpt,
-            model_name: backbone.name().to_string(),
+            model_name: orchestrator.rwkv().name().to_string(),
             weights_path: weights_dir.clone(),
             mixer_type: mixer_str.clone(),
             mixer_params: mixer_params as u64,

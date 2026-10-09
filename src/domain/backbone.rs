@@ -1,7 +1,9 @@
-//! ByteBackbone trait and RwkvBackbone implementation.
+//! ByteBackbone trait, RwkvBackbone, and BackboneOrchestrator.
 //!
 //! Phase B (R60): decouple neural backbones from the evaluation loop.
 //! The trait is the ONLY interface between neural models and the mixer.
+//! The orchestrator pre-blends all backbones into a single [f32; 256]
+//! so the mixer sees one neural source regardless of backbone count.
 
 use std::path::Path;
 use crate::domain::tensor::{Tensor, softmax};
@@ -174,6 +176,103 @@ impl RwkvBackbone {
         self.current_token += 1;
         self.current_byte_in_token = 0;
         self.have_rwkv = true;
+    }
+}
+
+/// Pre-blends all backbones into a single [f32; 256] for the mixer.
+///
+/// Owns one primary RwkvBackbone (always present, typed access for skip/blend)
+/// plus zero or more auxiliary backbones. With a single backbone, byte_probs()
+/// is a zero-cost pass-through. With multiple, it computes a uniform average.
+///
+/// This ensures the mixer sees ONE neural source regardless of backbone count,
+/// avoiding the +0.013/group regression from adding external mixer groups.
+pub struct BackboneOrchestrator {
+    primary: RwkvBackbone,
+    auxiliaries: Vec<Box<dyn ByteBackbone>>,
+}
+
+impl BackboneOrchestrator {
+    /// Create orchestrator with only the primary RWKV backbone.
+    pub fn new(primary: RwkvBackbone) -> Self {
+        Self { primary, auxiliaries: Vec::new() }
+    }
+
+    /// Add an auxiliary backbone (future: MambaByte, etc.).
+    pub fn add_backbone(&mut self, backbone: Box<dyn ByteBackbone>) {
+        self.auxiliaries.push(backbone);
+    }
+
+    /// Number of backbones (primary + auxiliaries).
+    pub fn backbone_count(&self) -> usize {
+        1 + self.auxiliaries.len()
+    }
+
+    /// Typed access to the primary RWKV backbone.
+    pub fn rwkv(&self) -> &RwkvBackbone {
+        &self.primary
+    }
+
+    /// Mutable typed access to the primary RWKV backbone.
+    pub fn rwkv_mut(&mut self) -> &mut RwkvBackbone {
+        &mut self.primary
+    }
+
+    /// Blended byte-level probabilities from all backbones.
+    /// Single backbone: zero-cost pass-through.
+    /// Multiple: uniform average (equal weights).
+    pub fn byte_probs(&self) -> [f32; 256] {
+        if self.auxiliaries.is_empty() {
+            // Pass-through: no allocation, no averaging
+            self.primary.byte_probs()
+        } else {
+            let n = self.backbone_count() as f32;
+            let mut blended = self.primary.byte_probs();
+            for aux in &self.auxiliaries {
+                let aux_probs = aux.byte_probs();
+                for i in 0..256 {
+                    blended[i] += aux_probs[i];
+                }
+            }
+            for i in 0..256 {
+                blended[i] /= n;
+            }
+            blended
+        }
+    }
+
+    /// Forward observe_byte to all backbones.
+    pub fn observe_byte(&mut self, byte: u8) {
+        self.primary.observe_byte(byte);
+        for aux in &mut self.auxiliaries {
+            aux.observe_byte(byte);
+        }
+    }
+
+    /// Reset all backbones.
+    pub fn reset(&mut self) {
+        self.primary.reset();
+        for aux in &mut self.auxiliaries {
+            aux.reset();
+        }
+    }
+
+    /// Total memory usage across all backbones.
+    pub fn memory_usage(&self) -> usize {
+        let mut total = self.primary.memory_usage();
+        for aux in &self.auxiliaries {
+            total += aux.memory_usage();
+        }
+        total
+    }
+
+    /// Names of all backbones for logging.
+    pub fn names(&self) -> Vec<&str> {
+        let mut names = vec![self.primary.name()];
+        for aux in &self.auxiliaries {
+            names.push(aux.name());
+        }
+        names
     }
 }
 

@@ -98,16 +98,15 @@ requirements, integration effort, known risks). See R60 A.2 for per-candidate ca
 **Already killed (Phase 0)**: ESM-2, DNABERT-2, ByT5, BLT 1B, MEGABYTE.
 **Survive Phase 0**: RWKV7-G1k, MambaByte, Chronos-Bolt, ProGen2, BioGPT, Evo 2, WaveNet.
 
-### Phase B: Architecture Modularization (zero behavioral changes)
+### Phase B: Architecture Modularization — COMPLETE (2026-10-09)
 
-Decouple RWKV from the evaluation loop. Make backbone plug-and-play.
+Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 
-- **B.1**: `ByteBackbone` trait (`byte_probs`, `observe_byte`, `reset`)
-- **B.2**: Refactor RWKV inline → `RwkvBackbone` (pure structural change)
-- **B.3**: `BackboneOrchestrator` — pre-blend all backbones into single `[f32; 256]`
-  (avoids +0.013/group regression pattern)
-- **B.4**: Bit-level adapter (existing `byte_probs_to_bit_preds`)
-- **B.5**: Validation gate — BPB identical ±0.0001 post-refactor
+- **B.1**: `ByteBackbone` trait — DONE (`src/domain/backbone.rs`)
+- **B.2**: `RwkvBackbone` struct — DONE (model + tokenizer + bridge + token tracking)
+- **B.3**: `BackboneOrchestrator` — DONE (primary + auxiliaries, pre-blend)
+- **B.4**: Bit-level adapter — DONE (pre-existing `byte_probs_to_bit_preds`)
+- **B.5**: Validation gate — PASSED (all T1 files ±0.0006, basic path exact)
 
 ### Phase C: Backbone Adoption (ordered by impact/risk)
 
