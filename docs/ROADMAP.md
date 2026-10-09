@@ -113,7 +113,7 @@ Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 | # | Action | Impact | Effort | Status |
 |---|---|---|---|---|
 | ~~C.0.1~~ | ~~G1k 0.1B upgrade~~ | N/A | N/A | KILLED — model doesn't exist |
-| C.0.2 | **Confidence-gated order-chain** | ooffice -0.0128 (3.5% of regression) | Low | KILLED — gate insufficient, chain confidently wrong |
+| ~~C.0.2~~ | ~~Confidence-gated order-chain~~ | ooffice -0.0128 (3.5% of regression) | Low | KILLED — gate insufficient, chain confidently wrong |
 | C.0.3 | **Eval at 1MB scale** | Validate R59 convergence projections | Low | PENDING |
 | C.0.4 | **G1k 1.5B Q8 as second backbone** | -0.10+ text BPB | Medium | PENDING (CLI ready) |
 | C.0.5 | **Stride-4 sparse model** (R61) | ait-E -0.52 BPB, text +0.0008 neutral | Low | DONE |
@@ -121,14 +121,16 @@ Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 | ~~C.1~~ | ~~MambaByte-Code 353M~~ | N/A | N/A | KILLED — .pth only (pickle = arbitrary code execution, CVE-2026-4372) |
 | C.2 | **ProGen2-small** (151M, protein, BSD-3) | ait-A: -1.0+ BPB | Medium | CONFIRMED (SafeTensors native) |
 
+**C.0.x summary**: 4 killed, 1 done. Internal optimization exhausted. Remaining work is external integration (C.0.4, C.2).
+
 ### Phase D: Advanced Features (contingent on C success)
 
 | # | Action | Prerequisite |
 |---|---|---|
 | D.1 | Confidence-skip CM→neural | Phase B |
-| D.2 | Per-backbone confidence weighting | Phase C.1 |
+| D.2 | Per-backbone confidence weighting | Phase C.0.4 |
 | D.3 | RWKV7-G1k 1.5B Q4 (scale up) | Phase C.0.4 |
-| D.4 | Self-distillation RWKV→uSSM | Phase C.1 |
+| ~~D.4~~ | ~~Self-distillation RWKV→uSSM~~ | KILLED — C.1 killed (no uSSM backbone) |
 | D.5 | Streaming mode (real-time input) | Phase B |
 
 ### Dependency Graph
@@ -181,6 +183,11 @@ Phase A = research only. Phase B = pure refactor. Phase C = behavioral changes (
 | R55 | Neural blend (Phase 3) | T1 mean -0.0221, binary -0.0096. Expert pre-blend with RWKV, no new group. | **DONE** |
 | R56 | Order-chain (Phase 4 E3) | T1 mean -0.0247, all 5 domains ↓. Chain order-N → N+1 hash. | **DONE** |
 | R56 | Rank encoding (Phase 4 E4) | Mean +0.010, sigma +0.008. MTF context harms exact matching. | **KILLED** |
+| C.0.1 | G1k 0.1B upgrade | Model doesn't exist (G1k starts at 1.5B). | **KILLED** |
+| C.0.2 | Confidence-gated order-chain | ooffice -0.0128 (3.5% of +0.36). Gate insufficient. | **KILLED** |
+| C.0.5 | Stride-4 sparse model | ait-E -0.5232 BPB. Text neutral (+0.0008). | **DONE** |
+| C.0.6 | CM confidence-based RWKV skip | +0.76 to +1.20. Intermittent inputs break mixer. | **KILLED** |
+| C.1 | MambaByte-Code 353M | .pth only — pickle security risk (CVE-2026-4372). | **KILLED** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.
 

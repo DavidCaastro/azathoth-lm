@@ -543,18 +543,22 @@ Projected                           Actual
   - B.4: Bit-level adapter (pre-existing `byte_probs_to_bit_preds`).
   - B.5: Validation gate PASSED — all T1 files within ±0.0006 BPB.
   - Files: `src/domain/backbone.rs` (new), `src/main.rs` (refactored).
-- **Phase C**: Backbone Adoption
-  - C.0.1: ~~G1k 0.1B upgrade~~ — KILLED (model doesn't exist, G1k starts at 1.5B).
-  - C.0.2: Confidence-gated order-chain — IMPLEMENTED, 100KB validation pending.
-  - C.0.5: Float byte-plane separation — NEW (R61, covers ait-E/F/ml-weights).
+- **Phase C**: Backbone Adoption — C.0.x internal optimization complete
+  - ~~C.0.1~~: G1k 0.1B upgrade — KILLED (model doesn't exist, G1k starts at 1.5B).
+  - ~~C.0.2~~: Confidence-gated order-chain — KILLED (ooffice -0.0128, 3.5% of regression, insufficient).
+  - C.0.3: Eval at 1MB scale — PENDING.
+  - C.0.4: G1k 1.5B Q8 as second backbone — PENDING (CLI `--backbone2` ready).
+  - **C.0.5**: Stride-4 sparse model — **DONE** (ait-E -0.5232 BPB, text neutral +0.0008).
+  - ~~C.0.6~~: CM confidence-based RWKV skip — KILLED (+0.76 to +1.20, breaks adaptive mixer).
   - ~~C.1~~: MambaByte-Code 353M — KILLED (security: .pth only, pickle = arbitrary code execution).
-  - C.2: Scientific micro-backbones — updated by R61:
-    - ProGen2-small CONFIRMED (BSD-3, SafeTensors native, covers ait-A protein).
+  - C.2: ProGen2-small — CONFIRMED (BSD-3, SafeTensors native, covers ait-A protein).
     - ~~Evo 2~~: KILLED (nucleotides ≠ amino acids, RAM too large).
     - ~~BioGPT~~: deprioritized (redundant with RWKV for text).
     - ~~WaveNet~~: deprioritized (no pretrained weights found).
+  - **C.0.x lesson**: 4 killed, 1 done. Internal optimization exhausted. Only adding
+    new information works (C.0.5). Modifying mixer inputs externally always fails.
 - **Phase D**: Advanced Features (confidence-skip, per-backbone weighting, scale up,
-  self-distillation, streaming mode).
+  streaming mode). D.4 (self-distillation) killed with C.1.
 - **Replaces**: old Tiers S/A/B/C + R51 (all complete/archived).
 
 ### R61: AIT DCC 2026 Backbone Coverage Analysis
