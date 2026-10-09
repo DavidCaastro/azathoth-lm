@@ -115,7 +115,7 @@ Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 | ~~C.0.1~~ | ~~G1k 0.1B upgrade~~ | N/A | N/A | KILLED — model doesn't exist |
 | ~~C.0.2~~ | ~~Confidence-gated order-chain~~ | ooffice -0.0128 (3.5% of regression) | Low | KILLED — gate insufficient, chain confidently wrong |
 | C.0.3 | **Eval at 1MB scale** | Validate R59 convergence projections | Low | PENDING |
-| C.0.4 | **G1k 1.5B Q8 as second backbone** | -0.10+ text BPB | Medium | PENDING (CLI ready) |
+| ~~C.0.4~~ | ~~G1k 1.5B Q8 as second backbone~~ | Standalone 2.18, dual 1.38 (baseline 1.17) | Medium | KILLED — G1k 1.5B worse than 0.1B World at 10KB |
 | C.0.5 | **Stride-4 sparse model** (R61) | ait-E -0.52 BPB, text +0.0008 neutral | Low | DONE |
 | ~~C.0.6~~ | ~~CM confidence-based RWKV skip~~ | +0.76 to +1.20 regression | Low | KILLED — intermittent inputs break adaptive mixer |
 | ~~C.1~~ | ~~MambaByte-Code 353M~~ | N/A | N/A | KILLED — .pth only (pickle = arbitrary code execution, CVE-2026-4372) |
@@ -128,8 +128,8 @@ Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 | # | Action | Prerequisite |
 |---|---|---|
 | D.1 | Confidence-skip CM→neural | Phase B |
-| D.2 | Per-backbone confidence weighting | Phase C.0.4 |
-| D.3 | RWKV7-G1k 1.5B Q4 (scale up) | Phase C.0.4 |
+| ~~D.2~~ | ~~Per-backbone confidence weighting~~ | KILLED — C.0.4 killed (G1k worse than 0.1B) |
+| ~~D.3~~ | ~~RWKV7-G1k 1.5B Q4 (scale up)~~ | KILLED — C.0.4 killed |
 | ~~D.4~~ | ~~Self-distillation RWKV→uSSM~~ | KILLED — C.1 killed (no uSSM backbone) |
 | D.5 | Streaming mode (real-time input) | Phase B |
 
@@ -187,6 +187,7 @@ Phase A = research only. Phase B = pure refactor. Phase C = behavioral changes (
 | C.0.2 | Confidence-gated order-chain | ooffice -0.0128 (3.5% of +0.36). Gate insufficient. | **KILLED** |
 | C.0.5 | Stride-4 sparse model | ait-E -0.5232 BPB. Text neutral (+0.0008). | **DONE** |
 | C.0.6 | CM confidence-based RWKV skip | +0.76 to +1.20. Intermittent inputs break mixer. | **KILLED** |
+| C.0.4 | G1k 1.5B as second backbone | Standalone 2.18 BPB (worse than 0.1B). Dual 1.38 (+0.21). | **KILLED** |
 | C.1 | MambaByte-Code 353M | .pth only — pickle security risk (CVE-2026-4372). | **KILLED** |
 
 Full details, projections vs actuals, and lessons learned: `docs/CHANGELOG.md`.

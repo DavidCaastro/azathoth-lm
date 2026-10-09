@@ -547,7 +547,11 @@ Projected                           Actual
   - ~~C.0.1~~: G1k 0.1B upgrade — KILLED (model doesn't exist, G1k starts at 1.5B).
   - ~~C.0.2~~: Confidence-gated order-chain — KILLED (ooffice -0.0128, 3.5% of regression, insufficient).
   - C.0.3: Eval at 1MB scale — PENDING.
-  - C.0.4: G1k 1.5B Q8 as second backbone — PENDING (CLI `--backbone2` ready).
+  - ~~C.0.4~~: G1k 1.5B Q8 as second backbone — KILLED.
+    Standalone: 2.1779 BPB (vs 1.1650 0.1B). Dual pre-blend: 1.3781 (+0.2131).
+    G1k 1.5B predicts worse than 0.1B World at 10KB. Uniform blend dilutes quality.
+    Commands: `--weights weights/rwkv7-g1k-1.5b --bytes 10000` (standalone),
+    `--backbone2 weights/rwkv7-g1k-1.5b --bytes 10000` (dual). Speed: 16-22 B/s.
   - **C.0.5**: Stride-4 sparse model — **DONE** (ait-E -0.5232 BPB, text neutral +0.0008).
   - ~~C.0.6~~: CM confidence-based RWKV skip — KILLED (+0.76 to +1.20, breaks adaptive mixer).
   - ~~C.1~~: MambaByte-Code 353M — KILLED (security: .pth only, pickle = arbitrary code execution).

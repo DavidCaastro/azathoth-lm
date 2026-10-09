@@ -81,7 +81,7 @@ NOT for general use — all baselines use `rwkv7-0.1b` (World v2.8).
 
 ### rwkv7-g1k-1.5b (G1k 1.5B)
 
-- **Status**: ACTIVE — second backbone candidate (C.0.4)
+- **Status**: EVALUATED — C.0.4 KILLED (worse than 0.1B at 10KB)
 - **Source**: RWKV/RWKV7-G1k-1.5B on HuggingFace
 - **Format**: SafeTensors (native, no conversion needed)
 - **License**: Apache 2.0
@@ -91,7 +91,7 @@ NOT for general use — all baselines use `rwkv7-0.1b` (World v2.8).
 - **Tokenizer**: `rwkv_vocab_v20230424.txt` (same as 0.1B)
 - **RAM (F32)**: ~5.7 GB
 - **RAM (Q8 auto)**: ~1.5 GB (auto-quantized at load time)
-- **Baseline BPB**: pending (C.0.4 evaluation)
+- **Baseline BPB**: 2.1779 (enwik8 10KB standalone), 1.3781 (dual with 0.1B, +0.2131 regression)
 - **Date added**: 2026-10-02
 - **Usage**: `--backbone2 weights/rwkv7-g1k-1.5b`
 - **Auto-detection**: `from_weights_dir()` recognizes "1.5b" → config(D=2048, L=24, H=32)
