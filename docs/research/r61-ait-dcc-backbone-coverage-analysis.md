@@ -342,6 +342,47 @@ Eval pending — expected ~14× slower per forward pass (D=2048 vs D=768).
 8. **MambaByte-Code** confirmed available (Apache-2.0, .pth needs conversion)
 9. **Chained Neural Predictors** paper (2604.15472) independently validates our R56
 
+### 9d. C.0.6: CM Confidence-Based RWKV Skip — KILLED
+
+**Hypothesis**: when CM produces confident predictions (low cost on previous byte),
+neutralize RWKV predictions (replace with 0.5) to prevent noise contamination.
+
+**Commands executed**:
+```bash
+# Baselines (no gate)
+cargo run --release -- hybrid-eval --input data/enwik8 --bytes 10000 --order-chain
+# Result: 1.1650 BPB
+
+cargo run --release -- hybrid-eval --input data/silesia/ooffice --bytes 10000 --order-chain
+# Result: 2.5179 BPB
+
+# Gate tests (neutralize RWKV to 0.5 when prev byte cost < threshold)
+cargo run --release -- hybrid-eval --input data/enwik8 --bytes 10000 --order-chain --cm-gate 2.0
+# Result: 1.9214 BPB, 66.9% bytes gated — CATASTROPHIC (+0.7564)
+
+cargo run --release -- hybrid-eval --input data/enwik8 --bytes 10000 --order-chain --cm-gate 4.0
+# Result: 2.1194 BPB, 77.5% bytes gated — CATASTROPHIC (+0.9544)
+
+cargo run --release -- hybrid-eval --input data/enwik8 --bytes 10000 --order-chain --cm-gate 6.0
+# Result: 2.3694 BPB, 88.2% bytes gated — CATASTROPHIC (+1.2044)
+
+cargo run --release -- hybrid-eval --input data/silesia/ooffice --bytes 10000 --order-chain --cm-gate 2.0
+# Result: 2.5509 BPB, 65.0% bytes gated — WORSE even on target domain (+0.0330)
+```
+
+**Root cause**: intermittent input changes break the adaptive LSTM mixer.
+The hierarchical mixer expects consistent group inputs. Switching between
+real RWKV predictions and neutral 0.5 prevents stable weight learning.
+Same fundamental problem as post-correction (R54): ANY external modification
+of mixer inputs fights online learning. The mixer ALREADY learns to weight
+RWKV down on predictable bytes — trying to duplicate that logic externally
+creates interference.
+
+**Generalized lesson**: NEVER gate/modify individual external inputs to the
+hierarchical mixer from outside. The mixer IS the gating mechanism.
+
+**Status**: KILLED. Code reverted. Flag `--cm-gate` removed.
+
 ## Sources
 
 - MambaByte: https://huggingface.co/collections/JunxiongWang/mambabyte-66de59f9ecc44bd637946442

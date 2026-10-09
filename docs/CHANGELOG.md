@@ -572,5 +572,9 @@ Projected                           Actual
 - **Key finding**: No pretrained autoregressive model exists for IEEE-754 float data
   with compatible license. Solution is byte-plane separation (ZipNN technique)
   applied selectively to CM models only (RWKV sees raw bytes per R52 lesson).
+- **C.0.5 stride-4 sparse**: ait-E -0.5232 BPB (6.74→6.22), text neutral (+0.0008). DONE.
+- **C.0.2 confidence gate**: ooffice -0.0128 (3.5% of +0.36 regression). KILLED — insufficient.
+- **C.0.6 CM-based RWKV skip**: enwik8 +0.76 to +1.20, ooffice +0.03. KILLED —
+  intermittent input changes break adaptive mixer (same root cause as R54).
 - See `docs/research/r61-ait-dcc-backbone-coverage-analysis.md`.
 - See `docs/research/r60-roadmap-restructure-multi-backbone.md`.

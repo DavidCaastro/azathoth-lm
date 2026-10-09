@@ -113,10 +113,11 @@ Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 | # | Action | Impact | Effort | Status |
 |---|---|---|---|---|
 | ~~C.0.1~~ | ~~G1k 0.1B upgrade~~ | N/A | N/A | KILLED — model doesn't exist |
-| C.0.2 | **Confidence-gated order-chain** | Fix ooffice +0.36, reymont +0.04 | Low | IMPLEMENTED — validation pending |
+| C.0.2 | **Confidence-gated order-chain** | ooffice -0.0128 (3.5% of regression) | Low | KILLED — gate insufficient, chain confidently wrong |
 | C.0.3 | **Eval at 1MB scale** | Validate R59 convergence projections | Low | PENDING |
-| C.0.4 | **G1k 1.5B Q8 as second backbone** | -0.10+ text BPB | Medium | PENDING |
-| C.0.5 | **Float byte-plane separation** (R61) | -1.0 to -1.7 BPB on floats (ait-E/F) | Medium | PENDING |
+| C.0.4 | **G1k 1.5B Q8 as second backbone** | -0.10+ text BPB | Medium | PENDING (CLI ready) |
+| C.0.5 | **Stride-4 sparse model** (R61) | ait-E -0.52 BPB, text +0.0008 neutral | Low | DONE |
+| ~~C.0.6~~ | ~~CM confidence-based RWKV skip~~ | +0.76 to +1.20 regression | Low | KILLED — intermittent inputs break adaptive mixer |
 | C.1 | **MambaByte-Code 353M** (byte-level SSM) | Executables: -0.5 to -2.0 BPB | High | PENDING (.pth, needs conversion) |
 | C.2 | **ProGen2-small** (151M, protein, BSD-3) | ait-A: -1.0+ BPB | Medium | CONFIRMED (SafeTensors native) |
 

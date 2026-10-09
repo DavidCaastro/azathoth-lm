@@ -58,6 +58,13 @@ esta vez seria diferente.
   unstable at small scale, ranks change continuously, exact byte matching lost.
   Context-space (ranks) vs prediction-space (raw bytes) mismatch. Only viable if
   prediction target is also rank-encoded (requires architecture change) or >1MB.
+- CM confidence-based RWKV gating (neutralize RWKV to 0.5 when CM cost < threshold):
+  CATASTROPHIC regression. enwik8 +0.76 (gate=2.0), +0.95 (gate=4.0), +1.20 (gate=6.0).
+  ooffice +0.03 (worse even on target domain). Root cause: intermittent input changes
+  break adaptive LSTM mixer. Same fundamental problem as post-correction (R54) —
+  ANY external modification of mixer inputs fights online learning. The mixer ALREADY
+  learns to weight RWKV down on predictable bytes. Generalizes: NEVER gate/modify
+  individual external inputs to the hierarchical mixer from outside.
 
 ## De edge-lm (Flux WHT, ~2.16 BPB)
 
