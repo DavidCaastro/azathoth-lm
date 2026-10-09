@@ -118,7 +118,7 @@ Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
 | C.0.4 | **G1k 1.5B Q8 as second backbone** | -0.10+ text BPB | Medium | PENDING (CLI ready) |
 | C.0.5 | **Stride-4 sparse model** (R61) | ait-E -0.52 BPB, text +0.0008 neutral | Low | DONE |
 | ~~C.0.6~~ | ~~CM confidence-based RWKV skip~~ | +0.76 to +1.20 regression | Low | KILLED — intermittent inputs break adaptive mixer |
-| C.1 | **MambaByte-Code 353M** (byte-level SSM) | Executables: -0.5 to -2.0 BPB | High | PENDING (.pth, needs conversion) |
+| ~~C.1~~ | ~~MambaByte-Code 353M~~ | N/A | N/A | KILLED — .pth only (pickle = arbitrary code execution, CVE-2026-4372) |
 | C.2 | **ProGen2-small** (151M, protein, BSD-3) | ait-A: -1.0+ BPB | Medium | CONFIRMED (SafeTensors native) |
 
 ### Phase D: Advanced Features (contingent on C success)

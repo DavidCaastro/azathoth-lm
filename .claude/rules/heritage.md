@@ -143,7 +143,7 @@ esta vez seria diferente.
 - **Fixed Share algorithm**: algoritmo de tracking optimo para non-stationary sources
 
 ### R51 — Items nuevos (no heredados, descubiertos por investigacion 2024-2026)
-- **uSSM byte-level** (StateSMix/MambaByte): → R51 Phase 3
+- ~~**uSSM byte-level** (StateSMix/MambaByte)~~: → **KILLED** — .pth only format (pickle = arbitrary code execution, CVE-2026-4372). No SafeTensors available. Security policy (R60 A.1) prohibits loading .pth directly.
 - ~~**Adaptive preprocessing**~~ (AIT DCC G2-V3): → R51 Phase 0 → **KILLED R52** (incompatible with pre-trained RWKV)
 - ~~**CM order-chain**~~ (Chained Neural 2026): → R51 Phase 4, arista E3 → **CONFIRMED R56** (mean -0.0247, all domains ↓)
 - ~~**Rank-based encoding**~~ (MTF sin BWT): → R51 Phase 4, arista E4 → **KILLED R56** (mean +0.010, MTF destroys exact matching at 10KB)

@@ -547,7 +547,7 @@ Projected                           Actual
   - C.0.1: ~~G1k 0.1B upgrade~~ — KILLED (model doesn't exist, G1k starts at 1.5B).
   - C.0.2: Confidence-gated order-chain — IMPLEMENTED, 100KB validation pending.
   - C.0.5: Float byte-plane separation — NEW (R61, covers ait-E/F/ml-weights).
-  - C.1: MambaByte-Code 353M (byte-level SSM, domain D target).
+  - ~~C.1~~: MambaByte-Code 353M — KILLED (security: .pth only, pickle = arbitrary code execution).
   - C.2: Scientific micro-backbones — updated by R61:
     - ProGen2-small CONFIRMED (BSD-3, SafeTensors native, covers ait-A protein).
     - ~~Evo 2~~: KILLED (nucleotides ≠ amino acids, RAM too large).

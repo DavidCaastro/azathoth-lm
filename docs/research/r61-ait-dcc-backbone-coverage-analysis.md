@@ -233,14 +233,19 @@ Design constraints:
 - CM-only preprocessing, or dual-path (RWKV sees raw, CM sees separated)
 - Kill criterion: if plane-0 BPB > 4.0 after 10KB, abort
 
-### Update Phase C.1 (MambaByte)
+### Update Phase C.1 (MambaByte) — KILLED (security)
 
-No changes needed — MambaByte-Code covers ait-H and modern-x64-pe as planned.
-Verified: Apache-2.0, weights available on HuggingFace (pytorch_model.bin,
-requires sandboxed conversion to SafeTensors per A.1 policy).
+**KILLED**: All MambaByte weights are distributed exclusively in .pth (pickle) format.
+Pickle executes arbitrary code by design (CVE-2026-4372, ShadowPickle 2026).
+No SafeTensors versions exist on HuggingFace. R60 A.1 security policy prohibits
+loading .pth directly. Sandboxed conversion in isolated VM was the proposed
+mitigation, but the risk/effort ratio is unacceptable given that:
+1. Security risk is not just theoretical — pickle deserialization attacks are active
+2. Full Mamba SSM inference must also be implemented in Rust from scratch
+3. Coverage (ait-H, modern-x64-pe) can partially be addressed by scaling RWKV (C.0.4)
 
-MambaByte variants available (all Apache-2.0, all .pth format):
-- MambaByte_Code (353M) — code/binary, primary candidate
+MambaByte variants (all Apache-2.0, **all .pth only**):
+- MambaByte_Code (353M) — code/binary
 - MambaByte_PG19_353M — English books
 - MambaByte_PG19_972M — English books, larger
 - MambaByte_Books — books domain
@@ -356,7 +361,7 @@ Eval pending — expected ~14× slower per forward pass (D=2048 vs D=768).
 5. **BOA Constrictor** is architecturally ideal but AGPL-3.0 (license kill)
 6. **Byte-plane separation** (ZipNN technique) is the viable path for floats
 7. **ProGen2-small** confirmed as best protein candidate (SafeTensors, BSD-3)
-8. **MambaByte-Code** confirmed available (Apache-2.0, .pth needs conversion)
+8. **MambaByte-Code** KILLED — .pth only (pickle security risk, no SafeTensors available)
 9. **Chained Neural Predictors** paper (2604.15472) independently validates our R56
 
 ### 9d. C.0.6: CM Confidence-Based RWKV Skip — KILLED
