@@ -80,6 +80,7 @@ enwik8-only numbers are "literature ref", never sole accept/reject gate.
 | **R56 — Phase 4 E4 rank-context** | **KILLED** | **mean +0.0098, sigma +0.0082, worst +0.0146. MTF context destroys exact matching at 10KB.** |
 | **R57 — Strategic positioning** | **Research** | **Universal data synthesis core vision. Adaptive middleware as sellable subproduct.** |
 | **R58 — Multi-backbone inventory** | **Research** | **50+ pretrained backbones cataloged. MambaByte (byte-level SSM) = top discovery. Roadmap reformulation pending.** |
+| **R59 — T2b R56 deep analysis** | **Complete** | **Convergence, bit costs, match model, competitive analysis. ooffice anti-learning root cause. Beat PAQ8PX on dickens at 100KB.** |
 | Phase 3 — Domain checkpoint | BLOCKED | Requires GPU (CPU-only hardware) |
 
 100KB "quick" eval on enwik8 only. Full composite requires Tier 1 (4 files).
