@@ -320,7 +320,24 @@ consecutive-context models miss entirely.
 
 +0.0008 on text = harmless. Mixer gives stride-4 model low weight on text.
 
-### Pending: ait-F, ait-G evaluation (expected similar improvement)
+### ait-F, ait-G evaluation (completed)
+
+```bash
+# Commands from background task bdffg6g2v
+cargo run --release -- hybrid-eval --input data/t3-modern/ait-E --bytes 10000 --order-chain
+# ait-E: 6.2169 BPB (baseline 6.7401, delta -0.5232)
+
+cargo run --release -- hybrid-eval --input data/t3-modern/ait-F --bytes 10000 --order-chain
+# ait-F: 6.2803 BPB (baseline 6.2775, delta +0.0028 — neutral)
+
+cargo run --release -- hybrid-eval --input data/t3-modern/ait-G --bytes 10000 --order-chain
+# ait-G: 2.3735 BPB (baseline 2.3078, delta +0.0657 — slight regression)
+```
+
+Stride-4 helps CERN F32 (regular IEEE-754) but not astro F32 (ait-F) or 16-bit
+integer images (ait-G). Likely: CERN floats have more regular exponent patterns
+across adjacent values; astro floats span wider dynamic range. ait-G is 16-bit,
+not 32-bit, so stride-4 doesn't capture byte-plane structure.
 
 ## 9c. Second Backbone Support (C.0.4)
 
