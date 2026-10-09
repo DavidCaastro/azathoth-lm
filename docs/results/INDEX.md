@@ -246,6 +246,38 @@ Note: T1b only 2 files (enwik8 + OEIS). OEIS header-bias dominates delta.
 | x-ray | Medical X-ray | **3.8482** | 4.0903 | -0.2421 | 40.5 | 1.00 | D |
 | sao | Astronomy | **5.2470** | 6.0483 | -0.8013 | 42.1 | 1.05 | D |
 
+### T2b R56 (12 Silesia, 100KB, --order-chain --neural-blend, 2026-10-09)
+
+| Metric | R56 | R50 baseline | Delta |
+|---|---|---|---|
+| **mean** | **1.8678** | 1.8814 | **-0.0136** |
+| **sigma** | **1.3857** | 1.4194 | **-0.0337** |
+| **worst** | **4.9844** (sao) | 5.2470 | **-0.2626** |
+| text-like mean | 0.9183 | 0.9200 | -0.0017 |
+| binary mean | 2.8173 | 2.8427 | -0.0254 |
+
+Composite gate: **PASS** (all 3 metrics down). 10/12 files improve. States saved: `states/t2b-r56/`.
+
+#### T2b R56 Detail (100KB, sorted by BPB)
+
+| File | Type | BPB R56 | BPB R50 | Delta | B/s | B/Tok | Cluster |
+|---|---|---|---|---|---|---|---|
+| xml | Structured | **0.2537** | 0.2679 | -0.0142 | 84 | 2.33 | A |
+| nci | Chemical | **0.3124** | 0.3228 | -0.0104 | 63 | 1.71 | A |
+| samba | Code | **1.0523** | 1.0603 | -0.0080 | 95 | 2.67 | B |
+| mozilla | Executable | **1.1253** | 1.1385 | -0.0132 | 40 | 1.08 | C |
+| webster | Dict EN | **1.1969** | 1.2079 | -0.0110 | 92 | 2.60 | B |
+| dickens | Text EN | **1.3387** | 1.3461 | -0.0074 | 141 | 4.05 | B |
+| reymont | Polish text | 1.3557 | 1.3151 | +0.0406 | 53 | 1.47 | C |
+| mr | Medical img | **1.3964** | 1.4190 | -0.0226 | 36 | 1.01 | C |
+| osdb | MySQL db | **2.3343** | 2.4770 | -0.1427 | 46 | 1.29 | C |
+| ooffice | Office bin | 3.2881 | 2.9265 | +0.3616 | 36 | 1.04 | D |
+| x-ray | Med X-ray | **3.7753** | 3.8482 | -0.0729 | 35 | 1.00 | D |
+| sao | Astronomy | **4.9844** | 5.2470 | -0.2626 | 36 | 1.05 | D |
+
+Regressions: reymont (+0.0406, Polish diacritics), ooffice (+0.3616, Office binary).
+Runtime: ~6.5h total (20:27–02:58).
+
 ### T3 Composite (11 modern files, 100KB/10KB, R50 2026-10-08)
 
 | Metric | Value |

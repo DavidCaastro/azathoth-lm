@@ -3,7 +3,7 @@
 **Date**: 2026-10-08
 **Current best (enwik8)**: 1.1810 BPB (100KB, Phase 1 R53)
 **Current composite (T1, 10KB)**: mean=1.4412 | sigma=0.2574 | worst=1.8184 (Phase 4 E3, R56)
-**Current composite (T2b, 100KB)**: mean=1.8814 | sigma=1.4825 | worst=5.2470 (12 Silesia, pre-Phase 1)
+**Current composite (T2b, 100KB)**: mean=1.8678 | sigma=1.3857 | worst=4.9844 (12 Silesia, R56 --order-chain --neural-blend)
 **Current composite (T3, 100KB)**: mean=3.3788 | sigma=2.5716 | worst=7.9891 (11 modern, pre-Phase 1)
 **Target**: < 1.0 BPB enwik8 + sigma decreasing — universal compressor
 **Primary metric**: Composite BPB (mean, sigma, worst) — see R28
