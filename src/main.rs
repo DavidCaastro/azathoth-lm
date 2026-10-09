@@ -45,7 +45,7 @@ fn print_usage() {
     eprintln!("  compress    --input PATH --output PATH [--weights DIR] [--bytes N] [--lr F] [--ngram-scale F] [--mix-eta F]");
     eprintln!("  decompress  --input PATH --output PATH [--weights DIR]");
     eprintln!("  cm-eval     --input PATH [--bytes N] [--e8e9]");
-    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--bytes N] [--skip THRESHOLD] [--no-hierarchical] [--no-match] [--no-emb-surgery] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--expert] [--expert-lr F] [--neural-blend] [--blend-lr F] [--order-chain] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
+    eprintln!("  hybrid-eval --input PATH [--weights DIR] [--backbone2 DIR] [--bytes N] [--skip THRESHOLD] [--no-hierarchical] [--no-match] [--no-emb-surgery] [--lstm-hidden N] [--lstm-lr F] [--lstm-layers N] [--expert] [--expert-lr F] [--neural-blend] [--blend-lr F] [--order-chain] [--log FILE.jsonl] [--emb-surgery METHOD] [--e8e9] [--preprocess auto|identity|delta:N|byteplane:N] [--save-state PATH]");
     eprintln!("  baseline    --input PATH [--weights DIR] [--bytes N] [--ensemble] [--lr F] [--tau F] [--ngram-scale F] [--log FILE.jsonl]");
     eprintln!("  rwkv-test   --weights DIR [--prompt TEXT]");
     eprintln!("  info        --ckpt PATH");
@@ -417,11 +417,13 @@ fn cmd_hybrid_eval(args: &[String]) {
     let mut save_state_path: Option<String> = None;
     let mut preprocess_arg: Option<String> = None;
     let mut order_chain = false;
+    let mut backbone2_dir: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--input" => { i += 1; input_path = args[i].clone(); }
             "--weights" => { i += 1; weights_dir = args[i].clone(); }
+            "--backbone2" => { i += 1; backbone2_dir = Some(args[i].clone()); }
             "--bytes" => { i += 1; max_bytes = args[i].parse().unwrap(); }
             "--skip" => { i += 1; skip_threshold = args[i].parse().unwrap(); }
             "--lstm" => { use_lstm = true; }
@@ -499,6 +501,17 @@ fn cmd_hybrid_eval(args: &[String]) {
     orchestrator.rwkv_mut().prepare(input_slice);
     eprintln!("[hybrid] tokenized: {} tokens ({:.2} bytes/token)",
               orchestrator.rwkv().token_count(), orchestrator.rwkv().bytes_per_token(total_bytes));
+
+    // Load optional second backbone (C.0.4: e.g., G1k 1.5B)
+    if let Some(ref bb2_dir) = backbone2_dir {
+        eprintln!("[hybrid] loading second backbone from {} ...", bb2_dir);
+        let mut bb2 = RwkvBackbone::load(bb2_dir, emb_surgery.as_deref());
+        bb2.prepare(input_slice);
+        eprintln!("[hybrid] backbone2: {} tokens ({:.2} bytes/token)",
+                  bb2.token_count(), bb2.bytes_per_token(total_bytes));
+        orchestrator.add_backbone(Box::new(bb2));
+    }
+
     if orchestrator.backbone_count() > 1 {
         eprintln!("[hybrid] backbones: {}", orchestrator.names().join(", "));
     }

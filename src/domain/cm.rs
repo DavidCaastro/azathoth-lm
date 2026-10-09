@@ -674,12 +674,13 @@ pub struct ContextMixer {
 // Sparse model offset tables (static lifetime).
 static SPARSE_SKIP1: &[usize] = &[1, 3];       // byte[-1], byte[-3]: skip-1 bigram
 static SPARSE_WIDE: &[usize] = &[1, 2, 4, 8];  // multi-scale sparse context
+static SPARSE_STRIDE4: &[usize] = &[4, 8, 12]; // same byte-plane in F32 streams (C.0.5, R61)
 
 impl ContextMixer {
     /// N_ORDER: number of consecutive-context order models (0-8)
     const N_ORDER: usize = 9;
-    /// N_SPARSE: number of sparse skip-gram models
-    const N_SPARSE: usize = 2;
+    /// N_SPARSE: number of sparse skip-gram models (includes stride-4 for float, C.0.5)
+    const N_SPARSE: usize = 3;
     /// N_INDIRECT: number of indirect context models
     const N_INDIRECT: usize = 1;
     /// N_WORD: number of word context models (unigram + bigram)
@@ -707,6 +708,10 @@ impl ContextMixer {
         // Sparse models (skip-gram patterns) — added to Group 1
         models.push(ContextModel::Sparse(SparseModel::new(SPARSE_SKIP1, 17, decay))); // 3 MB
         models.push(ContextModel::Sparse(SparseModel::new(SPARSE_WIDE,  16, decay))); // 1.5 MB
+        // Stride-4: same byte-plane in IEEE-754 F32 streams (C.0.5, R61)
+        // For float data: captures exponent-to-exponent patterns (~2.6 bits entropy)
+        // For non-float data: produces ~0.5 predictions, mixer gives low weight
+        models.push(ContextModel::Sparse(SparseModel::new(SPARSE_STRIDE4, 16, decay))); // 1.5 MB
 
         // Indirect context model (ICM order 1) — added to Group 1
         models.push(ContextModel::Indirect(IndirectModel::new(1, 16, 17, decay))); // 64KB hist + 3 MB table

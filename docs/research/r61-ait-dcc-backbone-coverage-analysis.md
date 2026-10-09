@@ -266,21 +266,69 @@ Remove or downprioritize candidates that failed Phase A:
 ait-D (pseudo-random, 7.9891 BPB) is provably incompressible.
 No action needed — document as theoretical floor.
 
-## 9. Confidence-Gated Order-Chain (C.0.2) — Preliminary
+## 9. Confidence-Gated Order-Chain (C.0.2) — Results
 
-During this session, confidence-gated order-chain was implemented (CHAIN_GATE=0.5).
-T1 results show slight regression vs ungated (+0.0004 to +0.0028 per file).
-The gate's purpose is to fix ooffice (+0.36) and reymont (+0.04) at 100KB scale.
+Implemented CHAIN_GATE=0.5 in `src/domain/cm.rs`. Falls back to unchained
+predict/update when `|chain_logit| < 0.5`.
 
-100KB validation pending (ooffice eval was running at session end).
-If the gate doesn't reduce ooffice regression by >50%, threshold needs tuning
-or the approach needs redesign.
+### T1 (10KB) — slight regression vs ungated
 
-Code changes in `src/domain/cm.rs`:
-- Added `CHAIN_GATE` constant (0.5)
-- Modified predict and update paths to fall back to unchained when
-  `|chain_logit| < CHAIN_GATE`
-- Zero new parameters, zero new memory
+| File | Gated | Ungated | Delta |
+|---|---|---|---|
+| enwik8 | 1.1637 | 1.1633 | +0.0004 |
+| dickens | 1.5345 | 1.5324 | +0.0021 |
+| samba | 1.1496 | 1.1468 | +0.0028 |
+| mozilla | 1.6470 | 1.6449 | +0.0021 |
+| OEIS | 1.8201 | 1.8184 | +0.0017 |
+
+### ooffice 100KB — gate insufficient
+
+- **Gated: 3.2753** vs ungated: 3.2881 = **-0.0128** (trivial)
+- vs baseline (no chain): 2.9265 → gated still **+0.3488** regression
+- Gate reduces only 3.5% of the +0.36 regression
+- **Verdict**: threshold 0.5 insufficient for ooffice anti-learning
+- Root cause: the chain logits ARE confident (|logit| > 0.5) but WRONG
+  because they learned from headers, then apply to compressed sections
+
+### Implication
+
+The confidence gate approach is fundamentally limited because the chain
+propagates CONFIDENTLY WRONG predictions, not uncertain ones. The real
+solution is CM confidence-based RWKV skip (C.0.6): when CM is already
+confident, don't mix in RWKV predictions that add noise.
+
+## 9b. Stride-4 Sparse Model (C.0.5) — Results
+
+Added `SPARSE_STRIDE4 = [4, 8, 12]` to Group 1, capturing same byte-plane
+patterns in IEEE-754 F32 streams. 1.5 MB additional memory.
+
+### Float domain — SIGNIFICANT improvement
+
+| File | With stride-4 | Baseline (R50) | Delta |
+|---|---|---|---|
+| ait-E (CERN F32) | **6.2169** | 6.7401 | **-0.5232** |
+
+-0.52 BPB on CERN floats from ONE additional sparse model. The stride-4
+context captures exponent-to-exponent patterns (entropy ~2.6 bits) that
+consecutive-context models miss entirely.
+
+### Text domain — negligible impact
+
+| File | With stride-4 | Baseline | Delta |
+|---|---|---|---|
+| enwik8 | 1.1674 | 1.1666 | +0.0008 |
+
++0.0008 on text = harmless. Mixer gives stride-4 model low weight on text.
+
+### Pending: ait-F, ait-G evaluation (expected similar improvement)
+
+## 9c. Second Backbone Support (C.0.4)
+
+Added `--backbone2 DIR` CLI flag. Loads a second RwkvBackbone and registers
+it with the BackboneOrchestrator. Orchestrator pre-blends byte_probs from
+both backbones (uniform average). G1k 1.5B weights already available locally.
+
+Eval pending — expected ~14× slower per forward pass (D=2048 vs D=768).
 
 ## 10. Key Findings
 
