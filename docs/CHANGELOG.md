@@ -593,3 +593,41 @@ Projected                           Actual
   intermittent input changes break adaptive mixer (same root cause as R54).
 - See `docs/research/r61-ait-dcc-backbone-coverage-analysis.md`.
 - See `docs/research/r60-roadmap-restructure-multi-backbone.md`.
+
+### C.1: Scale Validation (1MB) — INCOMPLETE
+
+- **Purpose**: Validate R59 convergence projections at 1MB scale.
+- **Command**: `cargo run --release -- hybrid-eval --input data/enwik8 --bytes 1000000 --order-chain`
+- **Status**: enwik8 1MB started but process crashed after "[hybrid] evaluating ..."
+  with exit code 1. No progress output produced. Suspected OOM or buffer overflow at
+  1MB scale with 15 CM models + RWKV + match model.
+- **Baselines**: enwik8 10KB=1.1633, 100KB=1.1810; dickens=1.5115; samba=1.1289;
+  mozilla=1.6599; OEIS=1.7424 (all 10KB).
+- **TODO**: Debug crash, re-run. May need memory optimization first.
+
+### C.2: Sparse Word Skip-Grams — KILLED
+
+- **Hypothesis**: Word skip-grams (w0,w2) and (w0,w3) capture longer-range word
+  associations that adjacent bigrams miss. Est. -0.02 to -0.03 BPB.
+- **Implementation**: Added word2_hash/word3_hash to WordModel, ctx_type 2 and 3,
+  shift chain in observe_byte, two new 3MB tables (bits=17). N_WORD: 2→4, N_MODELS: 15→17.
+- **Commands**:
+  - `cargo run --release -- hybrid-eval --input data/enwik8 --bytes 10000 --order-chain`
+  - `cargo run --release -- hybrid-eval --input data/silesia/dickens --bytes 10000 --order-chain`
+  - `cargo run --release -- hybrid-eval --input data/silesia/samba --bytes 10000 --order-chain`
+  - `cargo run --release -- hybrid-eval --input data/silesia/mozilla --bytes 10000 --order-chain`
+  - `cargo run --release -- hybrid-eval --input data/oeis/stripped --bytes 10000 --order-chain`
+  - `cargo run --release -- hybrid-eval --input data/enwik8 --bytes 100000 --order-chain`
+- **Results (10KB)**:
+  - enwik8: 1.1671 (+0.0038), dickens: 1.5350 (+0.0235), samba: 1.1521 (+0.0232),
+    mozilla: 1.6595 (-0.0004), OEIS: 1.8140 (+0.0716)
+  - Composite: mean=1.4655 (+0.0243), sigma=0.2734 (+0.0160), worst=1.8140 (-0.0044)
+- **Results (100KB)**: enwik8: 1.1836 (+0.0026 vs 1.1810 baseline)
+- **Root cause**: 2 extra models dilute mixer signal. Skip-grams require 3-4 words
+  of history to activate — at 10KB, most context slots are empty (returning 0.5).
+  Even at 100KB the regression persists. Same pattern as heritage "more models of
+  same type = diminishing returns after ~50".
+- **Lesson**: Word skip-grams at current scale provide insufficient unique context
+  to justify 2 extra mixer inputs. Adding models within existing group still causes
+  dilution if the models are weak/sparse. Only viable at >1MB with denser word history.
+- **Code**: Fully reverted. No artifacts remain.

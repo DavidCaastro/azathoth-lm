@@ -438,7 +438,7 @@ struct WordModel {
     word1_hash: u64,
     /// Whether we're inside a word (non-separator seen since last sep)
     in_word: bool,
-    /// Context type: 0 = word unigram (word[0]), 1 = word bigram (word[-1], word[-2])
+    /// Context type: 0=unigram, 1=bigram
     ctx_type: u8,
 }
 

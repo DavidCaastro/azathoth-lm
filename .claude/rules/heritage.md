@@ -116,7 +116,8 @@ esta vez seria diferente.
 
 ### Tier 3 — Tecnicas granulares
 - ~~**Diverse SSE contexts**~~ (R22): → **KILLED R54** (all post-correction fights adaptive mixer)
-- **Sparse word contexts** (R22): (w0,w2), (w0,w3), est. -0.02 a -0.03
+- ~~**Sparse word contexts**~~ (R22): → **KILLED C.2** (w0,w2)/(w0,w3) skip-grams +0.024 mean
+  at 10KB, +0.0026 at 100KB. Extra models dilute mixer; skip-grams too sparse at ≤100KB.
 - **Composite hashes**: combinar hash de match length + recency + position
 - **MatchTrust register**: confianza acumulada por modelo de match
 - ~~**Cross-feature combinations**~~: → **R51 Phase 1** (WHT feature expansion, arista E2)

@@ -115,8 +115,8 @@ Full details: `docs/research/r60-roadmap-restructure-multi-backbone.md`
 
 | # | Action | Impact est. | Effort | Target | Status |
 |---|---|---|---|---|---|
-| C.1 | **Scale validation (1MB)** | Validate R59 convergence | Zero (runtime) | All | PENDING |
-| C.2 | **Sparse word skip-grams** | -0.02 to -0.03 BPB | Low | Text | PENDING |
+| C.1 | **Scale validation (1MB)** | Validate R59 convergence | Zero (runtime) | All | BLOCKED (crash) |
+| ~~C.2~~ | ~~Sparse word skip-grams~~ | ~~-0.02 to -0.03 BPB~~ | ~~Low~~ | ~~Text~~ | **KILLED** (+0.024 mean) |
 | C.3 | **Match model: composite hashes** | Improve match predictions | Low | Structured | PENDING |
 | C.4 | **Stride-2 sparse model** | ait-G 16-bit coverage | Low | Integer data | PENDING |
 | C.5 | **CTW adaptive depth** | Optimal order weighting | Medium | All | PENDING |
@@ -130,8 +130,8 @@ Full details: `docs/research/r60-roadmap-restructure-multi-backbone.md`
 **Rationale per item**:
 - **C.1**: R59 shows 6/12 Silesia files improve 30-50% at 1MB. Must confirm before
   investing in CM changes that might only matter at scale.
-- **C.2**: Sparse word contexts (w0,w2), (w0,w3) from heritage Tier 3. Adds skip-gram
-  patterns at word level. Goes into Group 1. Low risk — similar to C.0.5 stride-4.
+- ~~**C.2**~~: KILLED. Sparse word skip-grams (w0,w2)/(w0,w3) regress +0.024 mean at
+  10KB, +0.0026 at 100KB. Extra models dilute mixer; skip-grams too sparse at ≤100KB.
 - **C.3**: Heritage Tier 3 composite hashes. Enhance existing match model with
   length + recency + position info. No new group — improves Group 3 from inside.
 - **C.4**: Like C.0.5 (stride-4 for F32) but stride-2 for 16-bit integer data (ait-G).
