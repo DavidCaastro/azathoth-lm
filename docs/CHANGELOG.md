@@ -561,8 +561,15 @@ Projected                           Actual
     - ~~WaveNet~~: deprioritized (no pretrained weights found).
   - **C.0.x lesson**: 4 killed, 1 done. Internal optimization exhausted. Only adding
     new information works (C.0.5). Modifying mixer inputs externally always fails.
-- **Phase D**: Advanced Features (confidence-skip, per-backbone weighting, scale up,
-  streaming mode). D.4 (self-distillation) killed with C.1.
+- **R62 Reform** (2026-10-09): Multi-backbone strategy largely disproven.
+  Phases C and D restructured around proven patterns:
+  - Phase C (reformed): CM enrichment within existing groups + scale validation.
+    C.1 scale (1MB), C.2 sparse word, C.3 composite hashes, C.4 stride-2,
+    C.5 CTW, C.6 RunMap. All low-medium effort, no new groups.
+  - Phase D (reformed): SA-PPM/suffix array, transformer inference engine,
+    full T4 evaluation, GGUF export.
+  - Killed from old D: D.1 confidence-skip (P1.4 already killed), D.2/D.3 (C.0.4 killed),
+    D.4 (C.1 killed). ProGen2 moved to D.2 (requires transformer engine).
 - **Replaces**: old Tiers S/A/B/C + R51 (all complete/archived).
 
 ### R61: AIT DCC 2026 Backbone Coverage Analysis

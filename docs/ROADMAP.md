@@ -67,79 +67,117 @@ Phase 1 (R53) confirmed: byte context + BPTT=64 passes T1 composite gate.
 | **sigma** | | **0.2677** | 0.3030 | **-0.0353** | |
 | **worst** | | **1.8200** | 1.8378 | **-0.0178** | |
 
-## What's Next — Multi-Backbone Architecture (R60)
+## What's Next — R62 Roadmap Reform
 
-The R51 organic roadmap is **COMPLETE** (2 confirmed, 3 killed). All single-backbone
-optimization is exhausted at 100KB scale. The next frontier is multi-backbone
-integration, following a strict sequence: **EVALUATE → MODULARIZE → INTEGRATE**.
+### Post-mortem: Multi-Backbone Strategy (R60, Phases A-C)
+
+The R60 multi-backbone hypothesis has been **largely disproven** at 10KB-100KB scale:
+
+- **Phase A** (security + evaluation): DONE — established criteria, killed 5 at Phase 0
+- **Phase B** (modularization): DONE — `ByteBackbone` trait, orchestrator, `--backbone2` CLI
+- **Phase C** (adoption): **6/8 KILLED, 1 DONE, 1 PENDING**
+
+Key findings from Phase C:
+1. **Multi-backbone dilutes quality** — G1k 1.5B is worse than 0.1B World (C.0.4)
+2. **External input gating breaks adaptive mixer** — any intermittent modification fails (C.0.6)
+3. **Security eliminates .pth-only models** — no SafeTensors = no integration (C.1)
+4. **Only adding new CM information works** — stride-4 sparse was the sole success (C.0.5)
+5. **Internal optimization is exhausted** — 4 of 4 internal tweaks killed (C.0.1-C.0.6)
+
+This combined with R51 (3/5 killed), Tiers S-C (10/17 killed), and 30+ total experiments
+confirms: **the architecture is at a hard local minimum with 15 CM + 1 RWKV at ≤100KB**.
+
+### What DOES work (proven across 30+ experiments)
+
+| Pattern | Examples | Why |
+|---|---|---|
+| **Add new information to existing groups** | C.0.5 stride-4, R55 neural blend | New signals without new LSTM inputs |
+| **Improve existing components internally** | S2 LayerNorm, S3 BPTT+Adam | Better learning, same structure |
+| **Scale data** | R59 projections: 30-50% ↓ at 1MB+ | CM + mixer converge with more bytes |
+| **Chain existing models** | R56 order-chain | Reuse CM predictions without new group |
+
+### What NEVER works
+
+| Anti-pattern | Examples | Root cause |
+|---|---|---|
+| Post-correction on adaptive mixer | R54, A1, C.0.6 | Second adaptation loop = interference |
+| New mixer groups at ≤100KB | A2, C1, S4 own group | +0.013/group overhead > prediction value |
+| Gating/modifying mixer inputs externally | C.0.6, R54 | Mixer IS the gating mechanism |
+| Bigger model ≠ better at small scale | C.0.4 G1k 1.5B | Training data/objective mismatch |
+| Domain detection | C3, preprocess auto | Violates universal compressor principle |
+
+### Phase C (reformed): CM Enrichment + Scale
+
+**Theme**: the only proven path is adding new prediction models WITHIN existing mixer
+groups and validating at larger scale. No new groups, no external gating, no new backbones.
 
 Full details: `docs/research/r60-roadmap-restructure-multi-backbone.md`
 
-### Phase A: Backbone Security & Quality Gate (zero code changes)
+| # | Action | Impact est. | Effort | Target | Status |
+|---|---|---|---|---|---|
+| C.1 | **Scale validation (1MB)** | Validate R59 convergence | Zero (runtime) | All | PENDING |
+| C.2 | **Sparse word skip-grams** | -0.02 to -0.03 BPB | Low | Text | PENDING |
+| C.3 | **Match model: composite hashes** | Improve match predictions | Low | Structured | PENDING |
+| C.4 | **Stride-2 sparse model** | ait-G 16-bit coverage | Low | Integer data | PENDING |
+| C.5 | **CTW adaptive depth** | Optimal order weighting | Medium | All | PENDING |
+| C.6 | **RunMap per context** | -0.03 to -0.06 BPB | Medium | All | PENDING |
 
-Establish trust framework BEFORE any integration work.
+**Constraints**:
+- All new models go into Group 0 or Group 1 (NO new mixer groups)
+- Each item must pass T1 composite gate (mean ↓, sigma ↓ or =, worst ↓ or ≤+0.05)
+- Kill if +0.005 on text at 10KB smoke
 
-**A.1 Weight Format Security Policy**: pickle is NEVER safe to load directly —
-it executes arbitrary code by design (CVE-2026-4372, ShadowPickle 2026).
-SafeTensors is the only audited format (Trail of Bits 2023). All `.pth` weights
-require sandboxed conversion in isolated VM. See R60 A.1 for full protocol.
+**Rationale per item**:
+- **C.1**: R59 shows 6/12 Silesia files improve 30-50% at 1MB. Must confirm before
+  investing in CM changes that might only matter at scale.
+- **C.2**: Sparse word contexts (w0,w2), (w0,w3) from heritage Tier 3. Adds skip-gram
+  patterns at word level. Goes into Group 1. Low risk — similar to C.0.5 stride-4.
+- **C.3**: Heritage Tier 3 composite hashes. Enhance existing match model with
+  length + recency + position info. No new group — improves Group 3 from inside.
+- **C.4**: Like C.0.5 (stride-4 for F32) but stride-2 for 16-bit integer data (ait-G).
+  Goes into Group 1. Proven pattern.
+- **C.5**: Context Tree Weighting replaces/enhances order-chain with theoretically
+  optimal depth weighting. Modifies existing models, no new group.
+- **C.6**: Heritage Tier 1, highest estimated impact. Second estimator per CM context.
+  Goes into Group 1. Risk: may be redundant with RWKV (like B4/S4).
 
-**A.2 Candidate Metadata**: each backbone carries structured risk assessment
-(publisher verification, format, SHA-256, RAM, security risk level, conversion
-requirements, integration effort, known risks). See R60 A.2 for per-candidate cards.
+### Phase D (reformed): New Paradigms + Deploy
 
-**A.3 Five-Phase Evaluation Protocol** (kill criteria at each phase):
-- Phase 0: Eligibility screen (5 min, paper only)
-- Phase 1: Standalone BPB (30 min, T1 reference corpus)
-- Phase 2: Redundancy analysis (1h, correlation with existing system)
-- Phase 3: Integration test (4-8h, composite gate)
-- Phase 4: Regression test (8-24h, T2b full suite)
+**Theme**: high-effort work that opens fundamentally new capabilities. Only justified
+after Phase C confirms diminishing returns from CM enrichment.
 
-**Already killed (Phase 0)**: ESM-2, DNABERT-2, ByT5, BLT 1B, MEGABYTE.
-**Survive Phase 0**: RWKV7-G1k, MambaByte, Chronos-Bolt, ProGen2, BioGPT, Evo 2, WaveNet.
-
-### Phase B: Architecture Modularization — COMPLETE (2026-10-09)
-
-Decoupled RWKV from the evaluation loop. Backbone is now plug-and-play.
-
-- **B.1**: `ByteBackbone` trait — DONE (`src/domain/backbone.rs`)
-- **B.2**: `RwkvBackbone` struct — DONE (model + tokenizer + bridge + token tracking)
-- **B.3**: `BackboneOrchestrator` — DONE (primary + auxiliaries, pre-blend)
-- **B.4**: Bit-level adapter — DONE (pre-existing `byte_probs_to_bit_preds`)
-- **B.5**: Validation gate — PASSED (all T1 files ±0.0006, basic path exact)
-
-### Phase C: Backbone Adoption (ordered by impact/risk) — R61 updated
-
-| # | Action | Impact | Effort | Status |
+| # | Action | Impact est. | Effort | Prerequisite |
 |---|---|---|---|---|
-| ~~C.0.1~~ | ~~G1k 0.1B upgrade~~ | N/A | N/A | KILLED — model doesn't exist |
-| ~~C.0.2~~ | ~~Confidence-gated order-chain~~ | ooffice -0.0128 (3.5% of regression) | Low | KILLED — gate insufficient, chain confidently wrong |
-| C.0.3 | **Eval at 1MB scale** | Validate R59 convergence projections | Low | PENDING |
-| ~~C.0.4~~ | ~~G1k 1.5B Q8 as second backbone~~ | Standalone 2.18, dual 1.38 (baseline 1.17) | Medium | KILLED — G1k 1.5B worse than 0.1B World at 10KB |
-| C.0.5 | **Stride-4 sparse model** (R61) | ait-E -0.52 BPB, text +0.0008 neutral | Low | DONE |
-| ~~C.0.6~~ | ~~CM confidence-based RWKV skip~~ | +0.76 to +1.20 regression | Low | KILLED — intermittent inputs break adaptive mixer |
-| ~~C.1~~ | ~~MambaByte-Code 353M~~ | N/A | N/A | KILLED — .pth only (pickle = arbitrary code execution, CVE-2026-4372) |
-| C.2 | **ProGen2-small** (151M, protein, BSD-3) | ait-A: -1.0+ BPB | Medium | CONFIRMED (SafeTensors native) |
+| D.1 | **SA-PPM / suffix array** | -0.30 to -0.60 BPB | High | C.1 confirms scale path |
+| D.2 | **Transformer inference engine** | Enable ProGen2, future models | High | D.1 or C exhausted |
+| D.3 | **Full T4 evaluation** (100MB enwik8 + Silesia) | Official results | Runtime (~10 days) | C complete |
+| D.4 | **GGUF export + streaming** | Deployment, interop | Medium | D.3 |
 
-**C.0.x summary**: 4 killed, 1 done. Internal optimization exhausted. Remaining work is external integration (C.0.4, C.2).
+**Rationale**:
+- **D.1**: SA-PPM is the highest-impact untried technique (heritage Tier 1, est. -0.30 to -0.60).
+  Suffix arrays enable exact substring matching at any depth in O(1). This is a paradigm
+  shift from hash-table CM (fixed orders) to unbounded-depth matching. Major Rust implementation.
+- **D.2**: Generic transformer inference in Rust unlocks ProGen2 (protein, ait-A) and
+  future SafeTensors-format models. Only justified if multi-backbone path reopens.
+- **D.3**: Full evaluation on enwik8 100MB + Silesia full + T3 modern. Required for
+  official positioning vs cmix/PAQ8px/NNCP.
+- **D.4**: GGUF export enables deployment in Ollama/LM Studio ecosystem. Streaming
+  mode enables real-time compression.
 
-### Phase D: Advanced Features (contingent on C success)
-
-| # | Action | Prerequisite |
-|---|---|---|
-| D.1 | Confidence-skip CM→neural | Phase B |
-| ~~D.2~~ | ~~Per-backbone confidence weighting~~ | KILLED — C.0.4 killed (G1k worse than 0.1B) |
-| ~~D.3~~ | ~~RWKV7-G1k 1.5B Q4 (scale up)~~ | KILLED — C.0.4 killed |
-| ~~D.4~~ | ~~Self-distillation RWKV→uSSM~~ | KILLED — C.1 killed (no uSSM backbone) |
-| D.5 | Streaming mode (real-time input) | Phase B |
-
-### Dependency Graph
+### Dependency Graph (reformed)
 
 ```
-Phase A (evaluate) ──→ Phase B (modularize) ──→ Phase C (adopt) ──→ Phase D (advanced)
+Phase A (DONE) ──→ Phase B (DONE) ──→ Phase C (CM enrichment) ──→ Phase D (paradigms)
+                                           │
+                                      C.1 (scale) validates path
+                                           │
+                                      C.2-C.6 (ordered by effort)
+                                           │
+                                      If diminishing → D.1 (SA-PPM)
 ```
 
-Phase A = research only. Phase B = pure refactor. Phase C = behavioral changes (must pass eval protocol). Phase D = contingent on C.
+Phase C is internally ordered: C.1 first (zero code, validates assumptions),
+then C.2-C.4 (low effort), then C.5-C.6 (medium effort). Each item independent.
 
 ## Completed Summary
 
@@ -216,18 +254,22 @@ R51 organic reform executed: 2 phases confirmed, 3 killed.
 1.1810  Phase 1 CONFIRMED (byte-context LSTM, BPTT=64) — R53
 1.1666  Phase 3 CONFIRMED (neural blend) — R55
 1.1633  Phase 4 E3 CONFIRMED (order-chain) — R56
-~1.15   Estimated CPU ceiling (single backbone)
-<1.0    Requires multi-backbone + domain coverage (R60 roadmap)
+~1.15   Estimated CPU ceiling (single backbone, ≤100KB)
+~1.05   Estimated ceiling with CM enrichment (C.2-C.6) + scale (1MB+)
+<1.0    Requires SA-PPM / suffix array (D.1) or new paradigm
 ```
 
-### Key Lessons (inform R60)
+### Key Lessons (inform R60 + R62 reform)
 
 - **100KB ceiling**: architecture is at hard local minimum with single backbone
 - **Group overhead pattern**: new externals → +0.013/group regression (R40, R44)
-- **Post-correction always fails**: ANY second adaptation loop fights adaptive mixer (R54)
+- **Post-correction always fails**: ANY second adaptation loop fights adaptive mixer (R54, C.0.6)
 - **Pre-blend works**: expert blend within existing group avoids overhead (R55)
 - **Improving existing > adding new**: only S2/S3 (existing component improvements) worked
 - **Convergence projections** (R59): 6/12 Silesia files show 30-50% improvement at 1MB+
+- **Multi-backbone dilutes at small scale**: G1k 1.5B worse than 0.1B World (C.0.4)
+- **Only new CM information works**: stride-4 = sole C.0.x success (C.0.5)
+- **External gating = interference**: mixer IS the gating mechanism (C.0.6 generalizes R54)
 
 ### Archived Tiers (S/A/B/C — all items DONE or KILLED)
 
